@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Snake / TabPFN</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>Snake <span>/</span> TabPFN <span id="mode-badge" class="badge" hidden>debug · stub model, no TabPFN calls</span></h1>
+    <p class="hint">Left: the game as you see it. Right: the same moves as the table TabPFN learns from.</p>
+  </header>
+  <div class="workspace">
+  <section class="panel game-view" aria-labelledby="you-title">
+    <div class="panel-heading"><h2 id="you-title">What you see</h2><p><strong id="score">0</strong> apples<span id="evaded" hidden> · you evaded <strong id="hungry">0</strong>/<span id="limit">50</span></span></p></div>
+    <canvas id="board" width="640" height="640" aria-label="Snake game board. While TabPFN plays, its predicted value for each possible turn is drawn on the square it leads to."></canvas>
+    <div id="tabpfn-status" class="tabpfn-status" data-state="idle" role="status" aria-label="TabPFN status">
+      <span class="dot"></span>
+      <div class="text"><strong id="tabpfn-state">Sleeping</strong><small id="tabpfn-detail"></small></div>
+      <span class="elapsed" id="tabpfn-elapsed"></span>
+    </div>
+    <div class="controls">
+      <select id="inputs" disabled aria-label="Model inputs" title="Model inputs. Changing them makes TabPFN retrain at its next game; saved moves stay.">
+        <option value="board">Inputs: board</option>
+        <option value="compact">Inputs: measurements</option>
+        <option value="augmented" selected>Inputs: board + measurements</option>
+        <option id="custom-inputs" value="custom" disabled hidden>Inputs: custom</option>
+      </select>
+      <button id="random-steps" disabled>Play 1000 random steps</button>
+      <button id="play" class="primary" disabled>Play game with TabPFN</button>
+    </div>
+    <p id="apple-hint" class="hint apple-hint" hidden>🍎 <strong>You are the apple.</strong> After each snake move you get a turn: arrow keys (or a click) step the apple one square; press again to change your mind, click the apple to stay. Survive <span class="limit">50</span> moves and the snake starves.</p>
+    <p id="status" class="hint" role="status">Connecting…</p>
+    <p id="setup" class="hint" hidden>To let TabPFN play, add TABPFN_TOKEN to .env and restart the server.</p>
+    <p id="error" role="alert" hidden></p>
+  </section>
+  <section id="data-view" class="panel tabpfn" aria-labelledby="tabpfn-title">
+    <div class="panel-heading">
+      <h2 id="tabpfn-title">What TabPFN sees</h2>
+      <div class="log-controls"><span id="memory" class="hint">0 saved moves</span><button id="clear" disabled>Clear table</button></div>
+    </div>
+    <p class="hint">One row per move. Inputs describe the board just before the move; the highlighted row is the latest move while a game runs.
+      While TabPFN plays, the three rows it is asked about appear at the bottom, get their answers, and the winner becomes the next saved row.</p>
+    <p id="table-note" class="hint" role="status">Loading…</p>
+    <div class="table-frame">
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Training data, scroll to see all columns">
+        <table id="training-table" aria-label="TabPFN training data"></table>
+      </div>
+    </div>
+    <div class="pagination">
+      <button id="table-prev" disabled aria-label="Previous data rows">←</button>
+      <span id="table-page"></span>
+      <button id="table-next" disabled aria-label="Next data rows">→</button>
+    </div>
+    <p class="hint">Readable labels for the numeric model inputs; hover a cell for the raw value.
+      Board columns are named like a chessboard: A1 is the top-left square. Scroll sideways for more columns.</p>
+    <p id="table-error" role="alert" hidden></p>
+  </section>
+  </div>
+  <section id="log-view" class="panel" aria-label="Debug log">
+    <div class="panel-heading">
+      <h2>Log</h2>
+      <div class="log-controls">
+        <span id="log-count" class="hint">0 entries</span>
+        <label class="hint"><input type="checkbox" id="log-follow" checked> Follow</label>
+        <button id="log-clear">Clear log</button>
+      </div>
+    </div>
+    <p class="hint">Every step the code takes: jobs, moves, rewards, fits, and TabPFN API calls.
+      Hover a line for the full text. This view only; nothing is written to disk.</p>
+    <div id="log-scroll" tabindex="0" role="log" aria-live="off">
+      <div id="log-entries"></div>
+    </div>
+  </section>
+</main>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

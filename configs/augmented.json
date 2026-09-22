@@ -1,0 +1,4 @@
+{
+  "groups": ["board", "context", "food", "danger", "space"],
+  "exclude": []
+}
