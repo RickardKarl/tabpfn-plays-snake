@@ -1,12 +1,11 @@
 import { refreshTable, setQuery, setLoading } from './data-view.js';
 import { refreshLog } from './log-view.js';
+import { tour } from './tour.js';
 
 const $ = (id) => document.getElementById(id);
-const ACTIONS = ['left', 'straight', 'right'];
 const DIRECTIONS = [[0, -1], [1, 0], [0, 1], [-1, 0]];
 const MARGIN = 26;
 const LETTERS = 'ABCDEFGHIJKLMNOP';
-const RANK_COLOURS = ['#a6e3a1', '#e6c76e', '#e0906d']; // best, middle, worst
 let current, presets, pending = false, connected = false;
 
 // The server records a frame for every board change. The browser fetches them in
@@ -30,36 +29,30 @@ function showError(message) {
   $('error').textContent = message || '';
 }
 
-function statusText() {
-  // While TabPFN works, the status card already shows the message.
-  if (current.job) return ['training', 'predicting', 'waiting'].includes(current.phase) ? '' : current.message;
-  if (current.error) return 'Stopped.';
-  if (!current.random_runs) return 'Play random steps first. TabPFN learns from those moves.';
-  if (current.fitted) return 'Model ready. TabPFN plays again with the same model.';
-  if (current.rows >= 10) return current.has_token
-    ? 'Moves saved. Playing with TabPFN first loads them as its table, then plays one move per prediction.'
-    : 'Moves saved.';
-  return 'Play random steps to get started.';
-}
+// The player can step the apple while any game is running; the hint and the evaded
+// counter belong to a game against TabPFN only.
+const inGame = () => !!current && ['waiting', 'predicting', 'random'].includes(current.phase);
+const versusGame = () => inGame() && current.job === 'playing';
+
+// When the current phase began, for the turn indicator's countdown.
+let phase = null, phaseSince = 0;
 
 function render() {
   if (!current) return;
+  if (current.phase !== phase) { phase = current.phase; phaseSince = performance.now(); }
   const busy = pending || !!current.job || !connected;
-  $('inputs').disabled = $('random-steps').disabled = busy;
+  $('inputs').disabled = busy;
   $('clear').disabled = busy || !current.rows;
-  const canPlay = current.random_runs > 0 && (current.fitted || (current.has_token && current.rows >= 10));
-  $('play').disabled = pending || !connected || (!current.job && !canPlay);
-  $('play').textContent = current.job ? 'Stop' : 'Play game with TabPFN';
+  $('play').disabled = pending || !connected || (!current.job && !current.has_token);
+  $('play').textContent = current.job ? 'Stop' : current.outcome ? 'Play again' : 'Play';
   $('memory').textContent = `${current.rows.toLocaleString()} saved moves`;
   $('setup').hidden = current.has_token;
   $('mode-badge').hidden = current.model_mode !== 'stub';
-  const playing = current.job === 'playing';
-  $('apple-hint').hidden = !playing;
-  $('evaded').hidden = !playing;
-  $('board').classList.toggle('playable', playing);
-  const limit = 2 * current.state.size * current.state.size;
-  $('limit').textContent = limit;
-  document.querySelectorAll('.apple-hint .limit').forEach(el => el.textContent = limit);
+  $('apple-hint').hidden = !versusGame();
+  $('evaded').hidden = !versusGame();
+  $('board').classList.toggle('playable', inGame());
+  $('limit').textContent = current.hunger_limit;
+  document.querySelectorAll('.limit').forEach(el => el.textContent = current.hunger_limit);
   const preset = Object.keys(presets).find(name => {
     const groups = presets[name];
     return !current.features.exclude.length && groups.length === current.features.groups.length
@@ -67,45 +60,19 @@ function render() {
   });
   $('custom-inputs').hidden = !!preset;
   $('inputs').value = preset || 'custom';
-  $('status').textContent = statusText();
   if (current.error) showError(current.error);
-  renderStatus();
-  setLoading(current.phase === 'training', current.message);
+  renderOverlay();
+  tour.update(current);
+  setLoading(current.phase === 'training');
 }
 
-// One status card for TabPFN: sleeping, loading the table as context, or predicting.
-const STATES = {
-  idle: ['Sleeping', c => c.fitted
-    ? 'Model ready. The next game with TabPFN reuses its loaded table.'
-    : c.rows >= 10 ? 'No model yet. The first game with TabPFN loads the saved moves first.'
-    : 'Waiting for saved moves.'],
-  random: ['Sleeping', () => 'Random steps do not use TabPFN.'],
-  waiting: ['Your move', c => c.pending_food
-    ? `Apple will step to ${'ABCDEFGHIJKLMNOP'[c.pending_food[0]]}${c.pending_food[1] + 1}. Press another arrow to change, or click the apple to stay.`
-    : 'Arrow keys step the apple one square. TabPFN is asked once your turn ends.'],
-  training: ['Loading table', c => c.message],
-  predicting: ['Predicting moves', c => c.message],
-};
-const STUB_STATES = {
-  ...STATES,
-  training: ['Loading table (stub)', c => c.message],
-  predicting: ['Predicting moves (stub)', c => c.message],
-};
-let phaseKey = null, phaseSince = 0;
-function renderStatus() {
-  const states = current.model_mode === 'stub' ? STUB_STATES : STATES;
-  const [state, detail] = states[current.phase] || states.idle;
-  $('tabpfn-status').dataset.state = current.phase in STATES ? current.phase : 'idle';
-  $('tabpfn-state').textContent = state;
-  $('tabpfn-detail').textContent = detail(current);
-  const key = `${current.phase}:${current.message}`;
-  if (key !== phaseKey) { phaseKey = key; phaseSince = Date.now(); }
-  if (!['training', 'predicting', 'waiting'].includes(current.phase)) $('tabpfn-elapsed').textContent = '';
+// Slim strip over the game-over board while TabPFN refits between games.
+function renderOverlay() {
+  const refit = current.job === 'playing' && current.phase === 'training';
+  $('overlay').hidden = !refit;
+  $('overlay-title').textContent = refit ? 'Learning from that game…' : '';
+  $('overlay-progress').textContent = refit ? current.message : '';
 }
-setInterval(() => {
-  if (!current || !['training', 'predicting', 'waiting'].includes(current.phase)) return;
-  $('tabpfn-elapsed').textContent = `${((Date.now() - phaseSince) / 1000).toFixed(1)} s`;
-}, 100);
 
 // Frames for one TabPFN move arrive as: query (rows sent, answer pending) → prediction
 // (values known, snake still) → move (snake moved). Random steps only send move/reset.
@@ -130,7 +97,6 @@ function show(frame, now) {
       Object.assign(view, {prev: view.state, state: frame.state, slideStart: now, pending: false, q: null});
       setQuery(null);
   }
-  $('score').textContent = view.state.score;
   $('hungry').textContent = view.state.hungry;
 }
 
@@ -164,81 +130,93 @@ function paint(now) {
     ctx.beginPath(); ctx.moveTo(0, i * cell); ctx.lineTo(size, i * cell); ctx.stroke();
   }
 
-  // TabPFN's view of the next move. Free squares get a tile drawn under the snake so the
-  // head slides onto the winner. Crash moves are marked after the snake is drawn: a red
-  // band on the head's edge for a wall, a red dashed outline over the body segment.
-  const showQ = view.pending || view.q;
-  const order = view.q ? [0, 1, 2].sort((a, b) => view.q[b] - view.q[a]) : null;
-  const crashes = [];
-  if (showQ) {
+  // TabPFN's view of the next move, drawn over the snake: an arrow from the head into each
+  // square a turn leads to. Opacity follows the relative preference, so three near-equal
+  // values read as indifference rather than a confident pick. Crash turns get a red tick.
+  function drawArrow(hx, hy, dx, dy, style, width) {
+    const sx = (hx + .5 + dx * .30) * cell, sy = (hy + .5 + dy * .30) * cell;
+    const ex = (hx + .5 + dx * .84) * cell, ey = (hy + .5 + dy * .84) * cell;
+    const head = cell * .15;
+    ctx.strokeStyle = style; ctx.lineWidth = width; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(ex - (dx + dy) * head, ey - (dy - dx) * head);
+    ctx.lineTo(ex, ey);
+    ctx.lineTo(ex - (dx - dy) * head, ey - (dy + dx) * head);
+    ctx.stroke();
+  }
+  function drawCrashTick(hx, hy, x, y, wall, chosen) {
+    const dx = x - hx, dy = y - hy;
+    ctx.strokeStyle = chosen ? '#ff6b5e' : 'rgba(224, 101, 91, .7)';
+    ctx.lineWidth = cell * (chosen ? .06 : .035); ctx.lineCap = 'round';
+    ctx.beginPath();
+    if (wall) { // A bar on the head square's edge that faces the wall.
+      const cx = (hx + .5 + dx * .46) * cell, cy = (hy + .5 + dy * .46) * cell, half = cell * .2;
+      ctx.moveTo(cx - dy * half, cy - dx * half); ctx.lineTo(cx + dy * half, cy + dx * half);
+    } else { // A cross on the body segment.
+      const cx = (x + .5) * cell, cy = (y + .5) * cell, r = cell * .11;
+      ctx.moveTo(cx - r, cy - r); ctx.lineTo(cx + r, cy + r);
+      ctx.moveTo(cx + r, cy - r); ctx.lineTo(cx - r, cy + r);
+    }
+    ctx.stroke();
+  }
+  // Returns true when the chosen turn is a crash, so the board can flag it.
+  function drawPredictions() {
+    if (!view.pending && !view.q) return false;
+    const [hx, hy] = state.snake[0], q = view.q;
+    const lo = q && Math.min(...q), hi = q && Math.max(...q);
+    const decided = q && hi - lo >= 0.05;
+    let crashChosen = false;
     candidates(state).forEach(([x, y], i) => {
       const offBoard = x < 0 || y < 0 || x >= state.size || y >= state.size;
       const eating = state.food && x === state.food[0] && y === state.food[1];
       const occupied = eating ? state.snake : state.snake.slice(0, -1);
       const onBody = occupied.some(([sx, sy]) => sx === x && sy === y);
-      if (offBoard || onBody) { crashes.push({x, y, i, kind: offBoard ? 'wall' : 'body'}); return; }
-      ctx.beginPath(); ctx.roundRect(x * cell + 4, y * cell + 4, cell - 8, cell - 8, 11);
-      if (view.pending) {
-        ctx.fillStyle = `rgba(255, 255, 255, ${0.10 + 0.07 * Math.sin(now / 220)})`; ctx.fill();
-        ctx.setLineDash([6, 6]); ctx.strokeStyle = 'rgba(255, 255, 255, .4)'; ctx.lineWidth = 2; ctx.stroke(); ctx.setLineDash([]);
-        ctx.fillStyle = 'rgba(255, 255, 255, .5)'; ctx.font = `600 ${cell * .32}px system-ui, sans-serif`;
-        ctx.fillText('?', (x + .5) * cell, (y + .5) * cell);
-      } else {
-        const rank = order.indexOf(i), q = view.q[i];
-        ctx.globalAlpha = rank === 0 ? .95 : .72;
-        ctx.fillStyle = RANK_COLOURS[rank]; ctx.fill();
-        ctx.globalAlpha = 1;
-        if (i === view.action) {
-          ctx.lineWidth = 3 + 1.5 * Math.sin((now - view.revealAt) / 140);
-          ctx.strokeStyle = '#f4ffe6'; ctx.stroke();
-        }
-        ctx.fillStyle = '#173f31';
-        ctx.font = `700 ${cell * .27}px system-ui, sans-serif`;
-        ctx.fillText((q >= 0 ? '+' : '') + q.toFixed(2), (x + .5) * cell, (y + .46) * cell);
-        ctx.font = `500 ${cell * .13}px system-ui, sans-serif`;
-        ctx.fillText(ACTIONS[i], (x + .5) * cell, (y + .74) * cell);
+      const chosen = !!q && i === view.action;
+      if (offBoard || onBody) {
+        drawCrashTick(hx, hy, x, y, offBoard, chosen);
+        crashChosen = crashChosen || chosen;
+        return;
       }
+      let style, width;
+      if (!q) {
+        style = `rgba(255, 255, 255, ${.28 + .12 * Math.sin(now / 220)})`; width = cell * .06;
+      } else if (chosen) {
+        style = 'rgba(244, 255, 230, .95)'; width = cell * .09;
+      } else {
+        const preference = decided ? (q[i] - lo) / (hi - lo) : .5;
+        style = `rgba(166, 227, 161, ${.15 + .45 * preference})`; width = cell * .06;
+      }
+      drawArrow(hx, hy, x - hx, y - hy, style, width);
     });
+    return crashChosen;
   }
 
-  // Draw one crash candidate (wall or body) with its value, on top of everything else.
-  function drawCrash({x, y, i, kind}) {
-    const CRASH = '#e0655b';
-    const [hx, hy] = state.snake[0];
-    const label = view.pending ? '?' : (view.q[i] >= 0 ? '+' : '') + view.q[i].toFixed(2);
-    const chosen = view.q && i === view.action;
-    ctx.setLineDash([5, 4]); ctx.lineWidth = chosen ? 4 : 2.5; ctx.strokeStyle = CRASH;
-    let px, py; // where the value pill goes
-    if (kind === 'wall') {
-      // A band along the head square's edge that faces the wall.
-      const dx = x - hx, dy = y - hy, t = cell * .16;
-      const bx = dx > 0 ? (hx + 1) * cell - t : hx * cell, by = dy > 0 ? (hy + 1) * cell - t : hy * cell;
-      const w = dx === 0 ? cell : t, h = dy === 0 ? cell : t;
-      ctx.globalAlpha = .85; ctx.fillStyle = CRASH; ctx.fillRect(bx, by, w, h); ctx.globalAlpha = 1;
-      ctx.strokeRect(bx + 1, by + 1, w - 2, h - 2);
-      px = (hx + .5 + dx * .28) * cell; py = (hy + .5 + dy * .28) * cell;
-    } else {
-      ctx.beginPath(); ctx.roundRect(x * cell + 4, y * cell + 4, cell - 8, cell - 8, 11); ctx.stroke();
-      px = (x + .5) * cell; py = (y + .5) * cell;
-    }
-    ctx.setLineDash([]);
-    // Value pill with the crash kind under it.
-    ctx.font = `700 ${cell * .18}px system-ui, sans-serif`;
-    const w = ctx.measureText(label).width + cell * .16, h = cell * .30;
-    ctx.fillStyle = CRASH; ctx.beginPath(); ctx.roundRect(px - w / 2, py - h / 2, w, h, h / 2); ctx.fill();
-    ctx.fillStyle = '#fff5f2'; ctx.fillText(label, px, py - cell * .02);
-    ctx.font = `600 ${cell * .11}px system-ui, sans-serif`;
-    ctx.fillText(`${ACTIONS[i]} · ${kind}`, px, py + cell * .22);
-  }
-
+  // Whose turn: during the player's turn the apple wears a ring that shrinks as the turn
+  // window runs out; while TabPFN thinks, the snake's head glows instead.
+  const versus = current && current.job === 'playing';
+  const applesTurn = versus && current.phase === 'waiting' && state.food;
   if (state.food) {
-    const [x, y] = state.food; ctx.fillStyle = '#edb16d'; ctx.beginPath();
-    ctx.arc((x + .5) * cell, (y + .5) * cell, cell * .20, 0, Math.PI * 2); ctx.fill();
+    const [x, y] = state.food, cx = (x + .5) * cell, cy = (y + .5) * cell;
+    if (applesTurn) {
+      const left = Math.max(0, 1 - (now - phaseSince) / (current.turn_window * 1000));
+      ctx.fillStyle = `rgba(237, 177, 109, ${.12 + .08 * Math.sin(now / 160)})`;
+      ctx.beginPath(); ctx.arc(cx, cy, cell * .42, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#ffdbab'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.arc(cx, cy, cell * .36, -Math.PI / 2, -Math.PI / 2 + left * Math.PI * 2); ctx.stroke();
+    }
+    ctx.fillStyle = '#edb16d'; ctx.beginPath();
+    ctx.arc(cx, cy, cell * .20, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = '#ffdbab'; ctx.lineWidth = 3; ctx.beginPath();
     ctx.moveTo((x + .52) * cell, (y + .29) * cell); ctx.lineTo((x + .6) * cell, (y + .2) * cell); ctx.stroke();
   }
+  if (versus && current.phase === 'predicting' && !state.done) {
+    const [hx, hy] = state.snake[0];
+    ctx.fillStyle = `rgba(208, 238, 160, ${.16 + .1 * Math.sin(now / 160)})`;
+    ctx.beginPath(); ctx.roundRect(hx * cell - 3, hy * cell - 3, cell + 6, cell + 6, 16); ctx.fill();
+  }
   // The player's requested apple step, shown as a ghost until the snake's next move.
-  const pendingFood = current && current.job === 'playing' && current.pending_food;
+  const pendingFood = inGame() && current.pending_food;
   if (pendingFood && (!state.food || pendingFood[0] !== state.food[0] || pendingFood[1] !== state.food[1])) {
     const [x, y] = pendingFood;
     ctx.setLineDash([4, 4]); ctx.strokeStyle = '#edb16d'; ctx.lineWidth = 2; ctx.beginPath();
@@ -269,18 +247,28 @@ function paint(now) {
     }
   });
 
-  crashes.forEach(drawCrash);
+  if (drawPredictions()) { // TabPFN picked a crash: flash the board edge.
+    ctx.globalAlpha = .55 + .35 * Math.sin((now - view.revealAt) / 90);
+    ctx.strokeStyle = '#ff6b5e'; ctx.lineWidth = 8;
+    ctx.beginPath(); ctx.roundRect(4, 4, size - 8, size - 8, 10); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
 
-  if (state.done && t >= 1) {
+  const outcome = current && !current.job ? current.outcome : null;
+  if ((state.done || outcome) && t >= 1) {
     const mid = size / 2;
-    ctx.fillStyle = '#102e24bb'; ctx.fillRect(0, mid - 70, size, 140);
+    ctx.fillStyle = '#102e24cc'; ctx.fillRect(0, mid - 70, size, 140);
     ctx.textBaseline = 'alphabetic';
-    ctx.fillStyle = '#f1f5e4'; ctx.font = 'bold 30px sans-serif';
-    const title = state.reason === 'board filled' ? 'Board complete!'
-      : state.reason === 'starvation' ? (current?.apple_moves ? 'You win! The snake starved' : 'The snake starved')
-      : state.reason === 'collision' ? 'The snake crashed' : 'Episode complete';
+    ctx.fillStyle = outcome === 'eaten' ? '#ffb3a8' : '#f1f5e4'; ctx.font = 'bold 30px sans-serif';
+    const moves = `${state.steps} move${state.steps === 1 ? '' : 's'}`;
+    const [title, detail] = outcome === 'eaten' ? ['Game over', `TabPFN ate you after ${moves}`]
+      : outcome === 'starved' ? ['You win!', `The snake starved after ${moves}`]
+      : outcome === 'crashed' ? ['You win!', `The snake crashed after ${moves}`]
+      : state.reason === 'board filled' ? ['Board complete!', `${state.score} apples`]
+      : state.reason === 'starvation' ? ['The snake starved', `${state.score} apples · ${state.steps} moves`]
+      : ['The snake crashed', `${state.score} apples · ${state.steps} moves`];
     ctx.fillText(title, mid, mid - 13);
-    ctx.font = '19px sans-serif'; ctx.fillText(`${state.score} apples · ${state.reason}`, mid, mid + 22);
+    ctx.fillStyle = '#f1f5e4'; ctx.font = '19px sans-serif'; ctx.fillText(detail, mid, mid + 22);
   }
   ctx.restore();
 }
@@ -299,6 +287,10 @@ async function refreshFrames() {
   const data = await api(`frames?after=${lastSeq}`);
   queue.push(...data.frames);
   lastSeq = data.latest;
+  // Fast random play outruns the screen; once the job is over, jump to the final board
+  // instead of replaying the backlog, and never let the backlog grow past a second or so.
+  if (!current.job && queue.length > 1) queue.splice(0, queue.length - 1);
+  else if (queue.length > 90) queue.splice(0, queue.length - 60);
 }
 
 // Show queued frames, skipping ahead when hundreds are waiting (random steps), and
@@ -310,8 +302,8 @@ function tick(now) {
     for (let i = Math.max(1, Math.ceil(queue.length / 30)); i > 0 && queue.length; i--) frame = queue.shift();
     show(frame, now);
     lastShownAt = now;
-    if (frame.kind === 'query') holdUntil = now + 400;
-    if (frame.kind === 'prediction') holdUntil = now + 1300;
+    if (frame.kind === 'query') holdUntil = now + 200;
+    if (frame.kind === 'prediction') holdUntil = now + 450;
   }
   paint(now);
   requestAnimationFrame(tick);
@@ -323,7 +315,7 @@ async function refresh() {
   connected = true;
   render();
   await refreshFrames();
-  await refreshTable(current.job === 'random-steps' || current.job === 'playing');
+  await refreshTable(['random-steps', 'preparing', 'playing'].includes(current.job));
   await refreshLog();
 }
 
@@ -336,30 +328,41 @@ async function command(path, body = {}) {
   finally { pending = false; render(); }
 }
 
-$('random-steps').onclick = () => command('random-steps', {moves: 1000});
 $('clear').onclick = () => {
-  if (confirm(`Clear all ${current.rows.toLocaleString()} saved moves? The file is archived, not deleted.`)) command('clear');
+  if (!confirm(`Clear all ${current.rows.toLocaleString()} saved moves? The file is archived, not deleted.`)) return;
+  command('clear').then(() => { if (!current.error) tour.begin('hook'); }); // A fresh table restarts the intro.
 };
-$('play').onclick = () => current.job ? command('pause') : command('play', {
-  moves: 100, policy: 'tabpfn', auto_fit: true, rounds: 3
-});
+$('play').onclick = () => {
+  if (current.job) return command('pause');
+  if (current.fitted) return tour.play();
+  tour.begin('practice'); // Prepare first; the tour card shows progress and the rules.
+};
+$('replay-intro').onclick = () => { if (!current.job) tour.begin('hook'); };
+tour.init({api, refresh, command, onChange: render});
 $('inputs').onchange = () => command('features', {groups: presets[$('inputs').value], exclude: []});
 
 // Play as the apple: one step per snake move, by arrow key or by clicking a neighbour.
+// Steps that are impossible (off the board, onto the snake, not a neighbour) are ignored
+// quietly; the game already shows where the apple can go.
 async function moveApple(x, y) {
-  if (!current || current.job !== 'playing' || !current.state.food) return;
+  if (!inGame() || !current.state.food) return;
+  const {size, snake, food} = current.state;
+  const [fx, fy] = food;
+  const neighbour = Math.abs(x - fx) + Math.abs(y - fy) === 1, stay = x === fx && y === fy;
+  const onBoard = x >= 0 && y >= 0 && x < size && y < size;
+  if (!stay && (!neighbour || !onBoard || snake.some(([sx, sy]) => sx === x && sy === y))) return;
   try { current = await api('apple', {x, y}); render(); }
-  catch (error) { $('status').textContent = error.message; }
+  catch (error) { console.warn(error.message); }
 }
 document.addEventListener('keydown', event => {
   const delta = {ArrowUp: [0, -1], ArrowRight: [1, 0], ArrowDown: [0, 1], ArrowLeft: [-1, 0]}[event.key];
-  if (!delta || !current || current.job !== 'playing' || !current.state.food) return;
+  if (!delta || !inGame() || !current.state.food) return;
   event.preventDefault();
   const from = current.state.food; // Each press re-picks the step from where the apple is.
   moveApple(from[0] + delta[0], from[1] + delta[1]);
 });
 $('board').addEventListener('click', event => {
-  if (!current || current.job !== 'playing') return;
+  if (!inGame()) return;
   const rect = $('board').getBoundingClientRect(), scale = 640 / rect.width;
   const size = current.state.size, cell = (640 - MARGIN) / size;
   const x = Math.floor(((event.clientX - rect.left) * scale - MARGIN) / cell);
@@ -367,15 +370,16 @@ $('board').addEventListener('click', event => {
   if (x >= 0 && y >= 0 && x < size && y < size) moveApple(x, y);
 });
 
+let resumed = false;
 async function poll() {
   try {
     if (!presets) presets = (await api('features')).presets;
     await refresh();
+    if (!resumed) { resumed = true; tour.resume(current); }
   } catch (error) {
     connected = false;
     render();
-    $('status').textContent = 'Cannot connect to the server.';
-    showError(error.message);
+    showError(`Cannot connect to the server. ${error.message}`);
   }
   setTimeout(poll, 300);
 }

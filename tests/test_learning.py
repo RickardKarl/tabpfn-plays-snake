@@ -22,10 +22,11 @@ class ActionRegressor:
 
 
 def test_feature_presets_and_individual_columns():
-    state = Snake().state
+    state = Snake(size=5).state
     assert len(FeatureSpec.read("board").row(state, 1)) == 30  # 25 cells + 4 context + action
     assert len(FeatureSpec.read("compact").row(state, 1)) == 16
     assert len(FeatureSpec.read("augmented").row(state, 1)) == 41
+    assert len(FeatureSpec.read("board").row(Snake().state, 1)) == 21  # 16 cells on 4 × 4
     spec = FeatureSpec(("food", "context"), ("will_eat",))
     row = spec.row(state, 1)
     assert "will_eat" not in row and "cell_0_0" not in row and row["action"] == 1

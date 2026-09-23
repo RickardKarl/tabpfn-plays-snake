@@ -4,7 +4,7 @@ from dataclasses import replace
 import pytest
 
 from snake_pfn.control.policies import heuristic_action
-from snake_pfn.game.engine import Snake, State, candidate
+from snake_pfn.game.engine import DEFAULT_SIZE, STARVATION_MOVES, Snake, State, candidate
 
 
 def test_seed_reproducibility_and_food_never_on_body():
@@ -17,6 +17,15 @@ def test_seed_reproducibility_and_food_never_on_body():
             break
         action = heuristic_action(left.state, rng)
         assert left.step(action) == right.step(action)
+
+
+def test_default_board_is_small_and_size_is_configurable():
+    assert Snake().state.size == DEFAULT_SIZE == 4
+    assert Snake(size=4).state.snake == ((2, 2), (1, 2), (0, 2), (0, 1))  # Tail bends up.
+    assert Snake(size=8).state.snake == ((4, 4), (3, 4), (2, 4), (1, 4))
+    assert Snake(size=16).state.size == 16
+    with pytest.raises(ValueError, match="between"):
+        Snake(size=3)
 
 
 def test_eating_and_collision_rewards():
@@ -45,7 +54,7 @@ def test_vacating_tail_is_legal_but_body_is_not():
 
 def test_starvation_and_food_resets_timer():
     env = Snake()
-    limit = 2 * env.state.size**2  # 50 moves without food on the 5 × 5 board
+    limit = STARVATION_MOVES
     env.state = replace(env.state, hungry=limit - 1, food=(0, 0))
     state, reward = env.step(1)
     assert state.reason == "starvation" and reward == -1

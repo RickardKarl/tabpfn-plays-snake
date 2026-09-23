@@ -19,12 +19,15 @@ log = logging.getLogger("snake_pfn.tabpfn")
 class HostedRegressor:
     def __init__(self, version=None, interval=None):
         from tabpfn_client import TabPFNRegressor
+        from tabpfn_client.estimator import ClientOptions
 
         if not os.getenv("TABPFN_TOKEN"):
             raise ValueError("Set TABPFN_TOKEN in .env and restart the server to use TabPFN.")
         self.version = version or os.getenv("SNAKE_MODEL_VERSION", "v3.5-fast")
         self.model = TabPFNRegressor.create_default_for_version(self.version)
-        self.model.set_params(fit_mode="fit_with_cache")
+        # One request may not stall a game: the client retries once, then the job errors out.
+        timeout = float(os.getenv("SNAKE_API_TIMEOUT", "20"))
+        self.model.set_params(fit_mode="fit_with_cache", client_options=ClientOptions(timeout=timeout))
         self.interval = (
             float(os.getenv("SNAKE_API_INTERVAL", "0.2")) if interval is None else interval
         )
@@ -165,6 +168,11 @@ class Learner:
             self.fit_rows = len(rows)
             self.last_fit_seconds = round(time.monotonic() - started, 2)
             log.info("Round %d fitted in %.2f s", self.rounds, self.last_fit_seconds)
+        if self.model is not None and not stop():
+            # The first prediction against a fresh context pays its setup cost; pay it here,
+            # while the player reads the rules, rather than on the first move of the game.
+            progress("Training TabPFN · warming up…")
+            self.model.predict(x.iloc[:3])
 
     def values(self, states):
         if self.model is None:

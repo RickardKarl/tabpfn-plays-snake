@@ -4,6 +4,10 @@ import random
 from dataclasses import asdict, dataclass
 
 ACTIONS = ("left", "straight", "right")
+DEFAULT_SIZE = 4
+MIN_SIZE, MAX_SIZE = 4, 16
+STARVATION_MOVES = 20  # Moves without food before the snake starves; the apple's win condition
+START_LENGTH = 4
 DIRECTIONS = ((0, -1), (1, 0), (0, 1), (-1, 0))
 TURNS = (-1, 0, 1)
 
@@ -51,13 +55,17 @@ def candidate(state: State, action: int):
 
 
 class Snake:
-    def __init__(self, seed: int = 0, size: int = 5):
-        if not 5 <= size <= 16:
-            raise ValueError("Board size must be between 5 and 16")
+    def __init__(self, seed: int = 0, size: int = DEFAULT_SIZE):
+        if not MIN_SIZE <= size <= MAX_SIZE:
+            raise ValueError(f"Board size must be between {MIN_SIZE} and {MAX_SIZE}")
         self.seed = seed
         self.rng = random.Random(seed)
         mid = size // 2
-        body = ((mid, mid), (mid - 1, mid), (mid - 2, mid))
+        # Head in the middle row heading right; the body runs left and, if the row is too
+        # short, the tail bends upward along the left edge.
+        body = tuple(
+            (mid - i, mid) if mid - i >= 0 else (0, mid - (i - mid)) for i in range(START_LENGTH)
+        )
         self.state = State(size, body, 1, self._food(size, body))
 
     def _food(self, size, body):
@@ -78,7 +86,7 @@ class Snake:
             food = self._food(s.size, body)
             if food is None:
                 reason = "board filled"
-        if reason is None and hungry >= s.size * s.size * 2:
+        if reason is None and hungry >= STARVATION_MOVES:
             reason = "starvation"
         reward = -1.0 if reason in ("collision", "starvation") else (1.0 if eating else -0.01)
         self.state = State(

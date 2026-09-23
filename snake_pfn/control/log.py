@@ -1,4 +1,5 @@
-"""Bounded in-memory event log for the debug panel. Fed by the `snake_pfn` logger."""
+"""Bounded in-memory event log for the debug panel. Fed by the `snake_pfn` logger and by
+`tabpfn_client`, whose retry warnings would otherwise make a slow request look like a hang."""
 
 import logging
 import threading
@@ -6,6 +7,7 @@ from collections import deque
 from datetime import datetime, timezone
 
 LOGGER = "snake_pfn"
+LOGGERS = (LOGGER, "tabpfn_client")
 
 
 class EventLog(logging.Handler):
@@ -16,9 +18,10 @@ class EventLog(logging.Handler):
         self.entries = deque(maxlen=capacity)
         self.counter = 0
         self.lock_ = threading.Lock()
-        logger = logging.getLogger(LOGGER)
-        logger.setLevel(logging.DEBUG)
-        logger.addHandler(self)
+        for name in LOGGERS:
+            logger = logging.getLogger(name)
+            logger.setLevel(logging.DEBUG if name == LOGGER else logging.INFO)
+            logger.addHandler(self)
 
     def emit(self, record):
         message = record.getMessage()
@@ -33,7 +36,7 @@ class EventLog(logging.Handler):
                         timespec="milliseconds"
                     ),
                     "level": record.levelname.lower(),
-                    "source": record.name.removeprefix(LOGGER + ".") or LOGGER,
+                    "source": record.name.removeprefix(LOGGER + ".").split(".")[0] or LOGGER,
                     "message": message,
                 }
             )
@@ -48,5 +51,6 @@ class EventLog(logging.Handler):
         pass
 
     def detach(self):
-        logging.getLogger(LOGGER).removeHandler(self)
+        for name in LOGGERS:
+            logging.getLogger(name).removeHandler(self)
         super().close()

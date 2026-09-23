@@ -17,40 +17,65 @@ Open <http://127.0.0.1:8000>. No key is needed for collection or CLI baseline ev
 Get a token from [Prior Labs](https://platform.priorlabs.ai/account/api-keys).
 Restart the server after editing `.env`. It binds to localhost only.
 
-1. **Play 1000 random steps** plays random moves across as many games as needed, in
-   about five seconds. Every move is appended to the table next to the board; the board
-   animates the run, skipping frames when they arrive faster than the screen refreshes.
-2. Choose **Board**, **Measurements**, or **Board + measurements** under model inputs.
-   Changes apply immediately and reset the fitted model.
-3. **Play game with TabPFN**. The first press trains TabPFN on the saved moves (three
-   fitted Q rounds, roughly 15–20 s on the hosted API), then TabPFN chooses the moves.
-   A status card under the board says what TabPFN is doing, with a timer: **Sleeping**
-   when idle, **Loading table** while the sampled moves are uploaded as its server-side
-   context, and **Predicting moves** while the three candidate rows are scored against
-   that cached context (about 1 s per move, where the time goes). The context is *not*
-   reloaded after each move: it is rebuilt only at the first TabPFN game, after an input
-   change, and after every fifth TabPFN game. TabPFN's view of the next move is drawn on
-   the board itself: the square each turn leads to shows a dashed "?" tile while the
-   prediction is pending, then the predicted expected future reward, coloured green,
-   amber, and rust from best to worst, with the winner outlined. After a 1.5 s pause the
-   snake slides onto the winning tile. A turn into the wall is marked as a red band on the
-   head square's edge, and a turn into the body as a red dashed outline on that segment,
-   each with its value, so you can see when TabPFN rates a crash highly. TabPFN always takes the highest
-   value; there is no exploration. Later presses reuse the model. Play with TabPFN
-   unlocks after the first random-steps run of the session.
-4. Try another input configuration using exactly the same collected experience;
-   the next game trains again with the new columns.
-5. **Clear table** archives the saved moves to a timestamped file and starts fresh.
+The first visit opens on a welcome card over the dimmed app: TabPFN plays the snake, you
+play the apple, and a pulsing *Live demo* badge says that every snake move is a real call
+to TabPFN. **Show me how** starts a guided run of about a minute; it cannot be skipped.
 
-Play is capped at 100 moves per click. The button becomes **Stop** while an
-operation is running; stopping waits for an in-flight API request to finish.
-TabPFN play is greedy: the highest predicted value always wins, with no exploration.
-It refits after every fifth completed episode.
-Every board change is recorded as a frame (`/api/frames?after=<seq>`) of kind `reset`,
-`prediction` (values known, snake not yet moved), or `move`; the browser
-fetches frames in batches and draws them on each screen refresh, skipping ahead when
-hundreds are queued, so the board follows the run even when the server runs faster
-than the page polls. TabPFN's one move per second is always shown frame by frame.
+1. **This is the board.** Any earlier saved moves are archived first (`/api/clear`), so the
+   intro always starts from an empty table, and the board is reset with the apple in A1
+   (`/api/reset` and `/api/random-steps` take an optional `food` square). The board lights up; TabPFN will steer the
+   snake, but as a tabular model it sees only a table.
+2. **This is everything TabPFN knows.** The table lights up, empty.
+3. **Every move becomes one row.** Six random moves play slowly (`/api/random-steps` with
+   `delay: 1.2`); each slides on the board and appears as a highlighted row. The card then
+   waits: **Let it watch 1,000 moves** hands over to fast practice.
+4. **Watching random moves.** Random moves play until the table holds 1000
+   (`Runner.practice_moves`), about ten seconds, with a live counter on the card. The card
+   then waits again: **Next** starts training.
+5. **Game rules.** Training starts quietly in the background (`/api/fit`, three fitted Q
+   rounds, roughly 15–20 s on the hosted API) while the card explains the rules: you play
+   the apple, arrow keys or a tap move it, survive 20 moves. **Got it** is never locked.
+6. **Are you ready?** Press **Play**. If TabPFN is still training, the card says *Awaiting
+   TabPFN initialization…* and the game starts by itself when it is done.
+
+The tour lives in the browser (`snake_pfn/web/static/tour.js`, remembered in
+`localStorage`) and only calls existing endpoints. **Replay intro** under Advanced runs it
+again, and so does **Clear table**: an empty table means TabPFN has never seen Snake, so
+the intro starts over, also on a fresh page load. Every step starts when you press its button, never on its own. On later visits the
+**Play** button starts a game directly when a model is fitted, or runs steps 4–6 first. Reloading the page during practice or training rejoins the
+running step. Practice and the demo use the random policy on purpose: TabPFN builds its
+skill from noise.
+
+During a game the board shows whose turn it is: on your turn the apple wears a ring that
+shrinks as the 1.5 s window (`Runner.turn_window`) runs out; while TabPFN scores the three
+candidate rows against its cached context (about 1 s per move, where the time goes) the
+snake's head glows. TabPFN's view
+of the next move is drawn on the board: an arrow from the head into each square a turn
+leads to. Arrow brightness follows the *relative* preference, so three near-equal values
+look equally faint; the chosen turn is drawn solid and bright. A turn into the wall is a
+short red bar on the head's edge, a turn into the body a red cross on that segment. If
+TabPFN picks a crash, the board edge flashes red for the half-second reveal, then the snake
+moves. TabPFN always takes the highest value; there is no exploration. The dashed circle
+is where you asked the apple to step; it moves when your turn ends.
+
+After every fifth completed TabPFN game it refits for one round on everything saved so
+far before the game ends, shown as a slim **Learning from that game…** strip over the board. The
+context is *not* reloaded after each move: it is rebuilt only at the first TabPFN game,
+after an input change, and at those refits.
+
+Play is capped at 100 moves per press. The button becomes **Stop** while an operation is
+running; stopping waits for an in-flight API request to finish. Every board change is
+recorded as a frame (`/api/frames?after=<seq>`) of kind `reset`, `query`, `prediction`
+(values known, snake not yet moved), or `move`; the browser fetches frames in batches and
+draws them on each screen refresh, skipping ahead when hundreds are queued, so the board
+follows the run even when the server runs faster than the page polls. TabPFN's moves are
+always shown frame by frame.
+
+**Advanced**, at the bottom of the table panel, holds the model-input presets (**Board**,
+**Measurements**, **Board + measurements**; changing them resets the fitted model and keeps
+the saved moves), **Clear table**, which archives the saved moves to a timestamped file and
+starts fresh, and **Replay intro**. Individual column selection and evaluation are available
+through the JSON configs and CLI below.
 
 Each TabPFN move needs one hosted prediction, which takes roughly 0.7–1.8 s on
 `v3.5-fast`; a fit takes about 4–5 s. `SNAKE_API_INTERVAL` adds a pause between calls
@@ -58,12 +83,15 @@ Each TabPFN move needs one hosted prediction, which takes roughly 0.7–1.8 s on
 Individual column selection and evaluation are available through the JSON configs
 and CLI below, keeping the demo to the board, inputs, and two buttons.
 
-The board is 5 × 5 by default. Set `SNAKE_BOARD_SIZE` (5–16) to change it; a log holds
-one board size, so on startup the server archives saved moves from a different size.
+The board is 4 × 4 by default (`DEFAULT_SIZE` in `snake_pfn/game/engine.py`). Set
+`SNAKE_BOARD_SIZE` (4–16) to change it; a log holds one board size, so on startup the server
+archives saved moves from a different size. The snake starts four segments long
+(`START_LENGTH`) in the middle row heading right; on a 4 × 4 board the tail bends up the
+left edge.
 
-The page is split in half: the light **What you see** panel holds the game and
-controls; the dark **What TabPFN sees** panel is the table the model receives. The
-decision happens in that table too: while TabPFN plays, the three candidate rows it is
+The page is split in half: the light **What you see** panel holds the game and the Play
+button; the dark **What TabPFN sees** panel is the table the model receives. The numbers
+live in that table, not on the board: while TabPFN plays, the three candidate rows it is
 asked about appear as ghost rows at the bottom with a blurred "?" target, fill with the
 predicted values when the answer lands, and the winning row becomes the next saved row.
 While the table is being uploaded as TabPFN's context, it dims and a light sweeps over it. Values are
@@ -77,8 +105,8 @@ from the latest successful fit, 20 rows per page. The latest prediction's three 
 rows remain available from `/api/table` as `prediction`. Inspection is read-only and
 makes no additional TabPFN calls.
 Fit/prediction tables live in memory for the server session and are cleared when the
-input configuration changes. The 20-game **collect** seeding is still available through
-the CLI and `/api/collect`.
+input configuration changes. The 20-game heuristic **collect** seeding is still available
+through the CLI and `/api/collect`.
 
 A **Log** panel at the bottom of the page shows everything the code does: jobs starting
 and finishing, each move with its square, direction, Q values, and reward, fit rounds
@@ -95,7 +123,14 @@ clicking the apple cancels it. When the window closes the step is applied and on
 is TabPFN asked, so the ghost query rows always show the board it actually saw. Moves
 made while TabPFN is predicting count for the following turn. Squares under the snake are
 not allowed. The header counts how many moves you have evaded; if the
-snake goes 50 moves (2 × board cells) without eating, it starves and you win. Apple moves
+snake goes 20 moves without eating, it starves and you win. You can step the apple during
+random practice too. In every mode the game resets as soon as the snake eats: the `+1` row
+is saved as usual and a fresh board follows. A game from the **Play** button
+is a *versus* game (`/api/play` with `versus: true`): it ends the moment the snake eats the
+apple (**Game over**), crashes, or starves (**You win!**), the board shows the result, and
+the button becomes **Play again**. The saved transitions are unchanged; eating is still a
+`+1`, non-terminal row. The limit is `STARVATION_MOVES`
+in `snake_pfn/game/engine.py`; it also scales the `hunger_fraction` feature. Apple moves
 are logged and saved transitions use the moved apple.
 
 ## Debug mode without TabPFN
@@ -141,11 +176,13 @@ reward, terminal flag, episode ID, seed, and collection policy. No feature prese
 affects logging. Features are derived from the pre-action state when fitting or
 predicting; outcomes and metadata never become input columns.
 
-| Preset (5 × 5 board) | Inputs, including candidate action |
+| Preset (4 × 4 board) | Inputs, including candidate action |
 | --- | --- |
-| `board` | 30: 25 ordered cells, heading, length, hunger, action |
+| `board` | 21: 16 ordered cells, heading, length, hunger, action |
 | `compact` | 16: context, food offsets/distances, danger, reachable space, action |
-| `augmented` | 41: all available features |
+| `augmented` | 32: all available features |
+
+Cell counts grow with the board: on 5 × 5, `board` has 30 columns and `augmented` 41.
 
 Board cells are logical state, rather than RGB pixels: empty `0`, food `-1`,
 tail `1`, increasing to the head's length. This preserves the order in which the
@@ -195,15 +232,19 @@ The first round uses observed rewards alone. Each subsequent round computes all
 targets with the frozen previous model and fits a fresh estimator. Every saved move
 goes into TabPFN's context; `--max-rows` in the CLI can cap it by random sample. Terminal
 transitions never bootstrap. The reward is `+1` for food, `−1` for collision or
-starvation, and `−0.01` for other moves. Starvation occurs after 2 × board cells moves
-without food (50 on the 5 × 5 board); filling the board wins.
+starvation, and `−0.01` for other moves. Starvation occurs after `STARVATION_MOVES` (20)
+moves without food; filling the board wins.
 
 TabPFN provides the action-value function; the heuristic is used only for the
 explicit baseline player and seed collection. Learned actions are not filtered
 through a safety heuristic, and nothing overrides the largest Q value.
 This is in-context regression: pretrained weights are never updated.
 
-The hosted adapter explicitly selects `v3.5-fast` and uses `fit_with_cache`.
+The hosted adapter explicitly selects `v3.5-fast` and uses `fit_with_cache`. Requests time
+out after `SNAKE_API_TIMEOUT` seconds (default 20); the client retries once, then the job
+stops with an error rather than leaving a game hanging. Its retry warnings appear in the Log
+panel. After the last training round the learner makes one small warm-up prediction so the
+first move of a game does not pay the fresh context's setup cost.
 Set `SNAKE_MODEL_VERSION=v3.5` to use the larger variant. All three candidate actions
 are predicted in one request per move. API calls are paced; adjust
 `SNAKE_API_INTERVAL` for your account. Fits and predictions consume hosted quota,
@@ -261,8 +302,8 @@ node --check snake_pfn/web/static/app.js snake_pfn/web/static/data-view.js snake
 ```
 
 Tests cover game rules, feature schemas, log round trips, terminal masking,
-frozen-target iteration, failed-fit recovery, random steps, frame streaming, the table's
-follow-latest mode, and the local API flow/concurrency.
+frozen-target iteration, failed-fit recovery, random steps, versus games,
+frame streaming, the table's follow-latest mode, and the local API flow/concurrency.
 Tests use explicit regression doubles; they do not consume hosted API quota or
 establish that TabPFN improves its score. Real model quality needs the evaluation
 run above with a valid token.

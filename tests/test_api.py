@@ -1,4 +1,5 @@
 import threading
+from dataclasses import replace
 
 import numpy as np
 from fastapi.testclient import TestClient
@@ -15,7 +16,9 @@ def finish(runner):
 def test_full_local_flow_and_feature_invalidation(tmp_path):
     runner = Runner(tmp_path)
     with TestClient(create_app(runner=runner)) as client:
-        assert client.get("/").status_code == 200
+        page = client.get("/")
+        assert page.status_code == 200 and page.headers["cache-control"] == "no-cache"
+        assert "cache-control" not in client.get("/api/state").headers
         assert client.get("/api/features").json()["presets"]["board"] == ["board", "context"]
         assert client.post("/api/collect", json={"episodes": 2}).status_code == 200
         finish(runner)
@@ -58,11 +61,6 @@ def test_missing_model_error_and_validation(tmp_path):
         assert client.post("/api/play", json={"policy": "tabpfn"}).status_code == 200
         finish(runner)
         data = client.get("/api/state").json()
-        assert "random steps first" in data["error"] and data["rows"] == 0
-        runner.random_runs = 1
-        client.post("/api/play", json={"policy": "tabpfn"})
-        finish(runner)
-        data = client.get("/api/state").json()
         assert "at least 10" in data["error"] and data["rows"] == 0 and data["job"] is None
         assert client.post("/api/play", json={"moves": -2}).status_code == 422
         assert client.post("/api/features", json={"groups": ["future_reward"]}).status_code == 409
@@ -81,7 +79,6 @@ def test_pause_during_prediction_does_not_execute_or_log_move(tmp_path):
     runner = Runner(tmp_path)
     runner.learner.model = BlockingPredictor()
     initial = runner.env.state
-    runner.random_runs = 1
     runner.launch("playing", lambda: runner.play(10, "tabpfn", 0, False, reveal=0, turn=0))
     try:
         assert entered.wait(5)
@@ -192,7 +189,6 @@ def test_play_trains_first_when_no_model_is_fitted(tmp_path):
     runner = Runner(tmp_path)
     runner.learner.factory = CountingModel
     runner.collect(2)
-    runner.random_runs = 1
     with TestClient(create_app(runner=runner)) as client:
         body = {"moves": 2, "policy": "tabpfn", "epsilon": 0, "auto_fit": False, "rounds": 2}
         runner.play_reveal = runner.turn_window = 0
@@ -219,6 +215,15 @@ def test_play_trains_first_when_no_model_is_fitted(tmp_path):
         client.post("/api/play", json=body)
         finish(runner)
         assert CountingModel.fits == 2  # The fitted model is reused.
+
+
+def test_random_steps_accept_a_bounded_delay(tmp_path):
+    runner = Runner(tmp_path)
+    with TestClient(create_app(runner=runner)) as client:
+        assert client.post("/api/random-steps", json={"moves": 2, "delay": 0.01}).status_code == 200
+        finish(runner)
+        assert client.get("/api/state").json()["rows"] == 2
+        assert client.post("/api/random-steps", json={"moves": 2, "delay": 10}).status_code == 422
 
 
 def test_saved_moves_from_another_board_size_are_archived_on_start(tmp_path):
@@ -295,7 +300,8 @@ def test_frames_capture_every_board_change_for_smooth_playback(tmp_path):
         assert data["frames"][0]["kind"] == "reset" and data["frames"][1]["kind"] == "move"
         assert {f["kind"] for f in data["frames"]} == {"reset", "move"}
         assert data["frames"][-1]["state"] == state["state"]
-        assert sum(f["reward"] == -1.0 for f in data["frames"]) == state["episodes"]
+        # A game ends with a crash or starvation (−1) or with the apple eaten (+1).
+        assert sum(f["reward"] in (-1.0, 1.0) for f in data["frames"]) == state["episodes"]
         assert all(f["q_values"] is None for f in data["frames"])
         assert client.get(f"/api/frames?after={data['latest']}").json()["frames"] == []
         assert client.get(f"/api/frames?after={seqs[-2]}").json()["frames"] == data["frames"][-1:]
@@ -337,27 +343,86 @@ def test_player_moves_the_apple_one_step_between_snake_moves(tmp_path):
     runner = Runner(tmp_path)
     runner.learner.factory = ZeroModel
     runner.collect(2)
-    runner.random_runs = 1
     with TestClient(create_app(runner=runner)) as client:
         assert client.post("/api/apple", json={"x": 0, "y": 0}).status_code == 409  # not playing
-        runner.job = "playing"  # Stand-in for a live TabPFN game.
+        runner.job, runner.phase = "playing", "waiting"  # Stand-in for a live TabPFN game.
         fx, fy = runner.env.state.food
-        far = (fx + 2) % 5, fy
-        assert client.post("/api/apple", json={"x": far[0], "y": far[1]}).status_code == 409
+        n = runner.size
+        far = (fx + 2) % n, fy  # Not a neighbour: ignored, no error.
+        assert client.post("/api/apple", json={"x": far[0], "y": far[1]}).json()["pending_food"] is None
         step = next(
             (x, y) for x, y in ((fx + 1, fy), (fx - 1, fy), (fx, fy + 1), (fx, fy - 1))
-            if 0 <= x < 5 and 0 <= y < 5 and (x, y) not in runner.env.state.snake
+            if 0 <= x < n and 0 <= y < n and (x, y) not in runner.env.state.snake
         )
         data = client.post("/api/apple", json={"x": step[0], "y": step[1]}).json()
         assert tuple(data["pending_food"]) == step and runner.env.state.food == (fx, fy)
         # Changing your mind: clicking the apple itself cancels the step; a new step replaces it.
         assert client.post("/api/apple", json={"x": fx, "y": fy}).json()["pending_food"] is None
         assert tuple(client.post("/api/apple", json={"x": step[0], "y": step[1]}).json()["pending_food"]) == step
-        runner.job = None
+        runner.job, runner.phase = None, "idle"
         before = len(runner.store.rows)
         runner.play(1, "tabpfn", 0, False, reveal=0, turn=0)  # Applies the step before asking TabPFN.
         saved = runner.store.rows[before]
-        assert saved.state.food == step and runner.snapshot()["apple_moves"] == 1
+        assert saved.state.food == step
+        # The per-game counter resets if that move ate the apple and started a new game.
+        assert runner.snapshot()["apple_moves"] == (0 if saved.reward == 1 else 1)
         assert runner.snapshot()["pending_food"] is None
-        kinds = [f["kind"] for f in runner.frames_since()["frames"]][-4:]
-        assert kinds == ["apple", "query", "prediction", "move"]
+        kinds = [f["kind"] for f in runner.frames_since()["frames"] if f["kind"] != "reset"][-4:]
+        assert kinds == ["apple", "query", "prediction", "move"]  # A reset may follow if it ate.
+
+
+def test_versus_game_ends_when_the_snake_eats_or_crashes(tmp_path):
+    class StraightAhead:
+        def predict(self, x):
+            return np.tile([0.0, 1.0, 0.0], len(x) // 3)
+
+    runner = Runner(tmp_path)
+    runner.learner.model = StraightAhead()
+    head = runner.env.state.snake[0]
+    runner.env.state = replace(runner.env.state, food=(head[0] + 1, head[1]))
+    runner.play(20, "tabpfn", 0, False, reveal=0, turn=0, versus=True)
+    data = runner.snapshot()
+    assert data["outcome"] == "eaten" and not data["state"]["done"] and data["state"]["score"] == 1
+    assert len(runner.store.rows) == 1 and data["message"].startswith("Game over")
+    assert data["history"][-1]["outcome"] == "eaten"
+    # Play again starts a fresh board; heading straight into the wall ends with a win.
+    runner.play(20, "tabpfn", 0, False, reveal=0, turn=0, versus=True)
+    data = runner.snapshot()
+    assert data["outcome"] == "crashed" and data["state"]["done"]
+    assert data["state"]["steps"] == 2 and data["message"].startswith("You win")
+    # Without versus the run continues into new games after a crash.
+    runner.play(3, "tabpfn", 0, False, reveal=0, turn=0)
+    assert runner.snapshot()["outcome"] is None and len(runner.store.rows) == 6
+
+
+def test_eating_starts_a_new_game_and_the_apple_moves_during_random_play(tmp_path):
+    runner = Runner(tmp_path)
+    head = runner.env.state.snake[0]
+    runner.env.state = replace(runner.env.state, food=(head[0] + 1, head[1]))
+    runner.play(1, "heuristic", 0, False)  # The food seeker eats straight away.
+    assert len(runner.store.rows) == 1 and runner.store.rows[0].reward == 1
+    assert runner.env.state.steps == 0 and runner.env.state.score == 0  # Fresh game.
+    assert runner.history[-1]["policy"] == "heuristic"
+    runner.phase = "random"
+    fx, fy = runner.env.state.food
+    step = next((x, y) for x, y in ((fx + 1, fy), (fx - 1, fy), (fx, fy + 1), (fx, fy - 1))
+                if 0 <= x < runner.size and 0 <= y < runner.size and (x, y) not in runner.env.state.snake)
+    runner.move_apple(step)
+    assert runner.pending_food == step
+    runner.phase = "idle"
+    runner.play(1, "random", 1, False)  # Applied before the random move.
+    assert runner.store.rows[-1].state.food == step
+
+
+def test_first_apple_can_be_placed_for_the_intro(tmp_path):
+    runner = Runner(tmp_path)
+    with TestClient(create_app(runner=runner)) as client:
+        assert client.post("/api/reset", json={"food": [0, 0]}).json()["state"]["food"] == [0, 0]
+        assert client.post("/api/reset").status_code == 200  # Body stays optional.
+        client.post("/api/random-steps", json={"moves": 1, "delay": 0, "food": [3, 3]})
+        finish(runner)
+        assert runner.store.rows[-1].state.food == (3, 3)
+        # A square under the snake is ignored and the seeded apple is kept.
+        head = runner.env.state.snake[0]
+        state = client.post("/api/reset", json={"food": list(head)}).json()["state"]
+        assert state["food"] not in state["snake"]

@@ -22,6 +22,7 @@ class PlayRequest(BaseModel):
     epsilon: float = Field(default=0.1, ge=0, le=1)  # Baseline policies only; TabPFN is greedy.
     auto_fit: bool = True
     rounds: int = Field(default=3, ge=1, le=10)
+    versus: bool = False  # One game against the apple player, ending when the snake eats
 
 
 class FitRequest(BaseModel):
@@ -33,8 +34,17 @@ class AppleRequest(BaseModel):
     y: int = Field(ge=0, le=15)
 
 
+Cell = tuple[int, int]
+
+
 class RandomStepsRequest(BaseModel):
     moves: int = Field(default=1000, ge=1, le=5000)
+    delay: float = Field(default=0.002, ge=0, le=5)  # Seconds between moves; slow for demos
+    food: Cell | None = None  # Where the first apple goes; random when omitted
+
+
+class ResetRequest(BaseModel):
+    food: Cell | None = None
 
 
 class CollectRequest(BaseModel):
@@ -52,6 +62,14 @@ def create_app(data_dir="data", runner=None):
         runner.events.detach()
 
     app = FastAPI(title="Snake / TabPFN", lifespan=lifespan)
+
+    @app.middleware("http")
+    async def revalidate_static(request, call_next):
+        # A stale cached app.js against fresh HTML leaves the board blank after an update.
+        response = await call_next(request)
+        if not request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
     def command(fn):
         try:
@@ -84,7 +102,7 @@ def create_app(data_dir="data", runner=None):
     @app.post("/api/random-steps")
     def random_steps(body: RandomStepsRequest):
         return command(
-            lambda: runner.launch("random-steps", lambda: runner.random_steps(body.moves))
+            lambda: runner.launch("random-steps", lambda: runner.random_steps(body.moves, body.delay, body.food))
         )
 
     @app.post("/api/features")
@@ -107,8 +125,8 @@ def create_app(data_dir="data", runner=None):
         return {"message": "Stopping after the current request completes"}
 
     @app.post("/api/reset")
-    def reset():
-        return command(runner.reset)
+    def reset(body: ResetRequest | None = None):
+        return command(lambda: runner.reset(body.food if body else None))
 
     @app.post("/api/collect")
     def collect(body: CollectRequest):

@@ -12,7 +12,7 @@ from uuid import uuid4
 
 import numpy as np
 
-from ..game.engine import ACTIONS, Snake, candidate
+from ..game.engine import ACTIONS, DEFAULT_SIZE, STARVATION_MOVES, Snake, candidate
 from .experience import Store, Transition, collect
 from .features import GROUPS, PRESETS, all_features
 from .learner import Learner, stub_enabled
@@ -27,13 +27,13 @@ class Runner:
     def __init__(self, data_dir="data", learner_factory=Learner, size=None):
         self.data_dir = Path(data_dir)
         self.events = EventLog()
-        self.size = int(size or os.getenv("SNAKE_BOARD_SIZE", "5"))
+        self.size = int(size or os.getenv("SNAKE_BOARD_SIZE", str(DEFAULT_SIZE)))
         self.store = Store(self.data_dir / "experience.jsonl")
         log.info("Loaded %d saved moves from %s", len(self.store.rows), self.store.path)
         self.learner_factory = learner_factory
         self.learner = learner_factory()
         self.env = Snake(0, self.size)
-        self.message = "Play a random game, choose inputs, then press Play."
+        self.message = "Press Play."
         foreign = {row.state.size for row in self.store.rows} - {self.size}
         if foreign:
             # One log holds one board size; keep the old game instead of mixing sizes.
@@ -51,11 +51,12 @@ class Runner:
         self.error = None
         self.job = None
         self.phase = "idle"  # idle · training · waiting (player's turn) · predicting · random
-        self.random_runs = 0  # Play with TabPFN unlocks after the first random-steps run
-        self.play_reveal = 1.5  # Seconds the predicted values stay on screen before the move
+        self.play_reveal = 0.5  # Seconds the predicted values stay on screen before the move
+        self.practice_moves = 1000  # Random moves TabPFN watches before its first game
         self.pending_query = None  # Rows TabPFN is scoring right now, for late-joining pages
         self.pending_food = None  # Where the player wants the apple next; applied between moves
         self.apple_moves = 0  # Player moves in the current game
+        self.outcome = None  # Versus game result: eaten · starved · crashed
         self.turn_window = 1.5  # Seconds after each snake move for the player to (re)choose
         # Every board change becomes a frame so the browser can animate each step.
         self.frames = deque(maxlen=600)
@@ -79,10 +80,13 @@ class Runner:
                 "rows": len(self.store.rows),
                 "job": self.job,
                 "phase": self.phase,
-                "random_runs": self.random_runs,
+                "hunger_limit": STARVATION_MOVES,
+                "turn_window": self.turn_window,
+                "practice_moves": self.practice_moves,
                 "query": self.pending_query,
                 "pending_food": self.pending_food,
                 "apple_moves": self.apple_moves,
+                "outcome": self.outcome,
                 "error": self.error,
                 "message": self.message,
                 "q_values": self.q_values,
@@ -135,18 +139,18 @@ class Runner:
         """Player move: the apple steps to a neighbouring free square before the snake's next move."""
         with self.lock:
             state = self.env.state
-            if self.job != "playing" or state.done or state.food is None:
-                raise ValueError("You can move the apple only while TabPFN is playing")
+            if self.phase not in ("waiting", "predicting", "random") or state.done or state.food is None:
+                raise ValueError("You can move the apple only while a game is running")
             x, y = cell
             fx, fy = state.food
             if (x, y) == (fx, fy):  # Changed your mind: stay put.
                 self.pending_food = None
                 self.publish()
                 return
-            if abs(x - fx) + abs(y - fy) != 1:
-                raise ValueError("The apple moves one square at a time")
-            if not (0 <= x < state.size and 0 <= y < state.size) or (x, y) in state.snake:
-                raise ValueError("That square is not free")
+            neighbour = abs(x - fx) + abs(y - fy) == 1
+            free = 0 <= x < state.size and 0 <= y < state.size and (x, y) not in state.snake
+            if not (neighbour and free):
+                return  # Impossible step: ignore it, the board already shows where the apple can go.
             self.pending_food = (x, y)
             self.publish()
 
@@ -278,21 +282,29 @@ class Runner:
                      spec.to_dict(), len(spec.row(self.env.state, 1)))
             self.publish()
 
-    def reset(self):
+    def reset(self, food=None):
         with self.lock:
             if self.job:
                 raise ValueError("Pause and wait before resetting")
-            self.new_game()
+            self.new_game(food=food)
             self.publish()
 
-    def new_game(self):
-        self.env = Snake(self.env.seed + 1, self.size)
+    def new_game(self, seed=None, food=None):
+        """Fresh board. `food` places the first apple on a chosen free square (the intro
+        uses A1) instead of the seeded random one."""
+        self.env = Snake(self.env.seed + 1 if seed is None else seed, self.size)
+        if food is not None:
+            cell = tuple(food)
+            state = self.env.state
+            if 0 <= cell[0] < self.size and 0 <= cell[1] < self.size and cell not in state.snake:
+                self.env.state = replace(state, food=cell)
         self.episode_id = uuid4().hex
         self.q_values = None
         self.last_action = None
         self.last_state = None
         self.pending_food = None
         self.apple_moves = 0
+        self.outcome = None
         self.frame(self.env.state, kind="reset")
 
     def clear(self):
@@ -319,8 +331,8 @@ class Runner:
         self.message = f"Collected {len(games)} episodes. Full states saved to disk."
         log.info("Collected %d games: %s", len(games), games)
 
-    def fit(self, rounds):
-        self.set_phase("training", "Training TabPFN on the saved moves…")
+    def fit(self, rounds, message="Training TabPFN on the saved moves…"):
+        self.set_phase("training", message)
         log.info("Fitting %d round(s) from %d saved moves with inputs %s",
                  rounds, len(self.store.rows), self.learner.spec.to_dict())
         self.learner.fit(self.store.rows, rounds=rounds, stop=self.stop.is_set,
@@ -329,23 +341,22 @@ class Runner:
         log.info("Model ready: %d fitted Q round(s) on %d rows",
                  self.learner.rounds, self.learner.fit_rows)
 
-    def random_steps(self, moves, delay=0.002):
+    def random_steps(self, moves, delay=0.002, food=None):
         """Play many random moves across games quickly; the browser skips frames to keep up."""
         seed = max((row.seed for row in self.store.rows), default=self.env.seed) + 1
-        self.env = Snake(seed, self.size)
-        self.episode_id = uuid4().hex
-        self.q_values = self.last_action = self.last_state = None
-        self.frame(self.env.state, kind="reset")
-        self.random_runs += 1
+        self.new_game(seed=seed, food=food)
         log.info("Random steps from seed %d", seed)
         self.play(moves, "random", 1, False, delay=delay)
 
     def play(self, moves, policy, epsilon, auto_fit, stop_after_episode=False, delay=0.12,
-             rounds=3, reveal=None, turn=None):
+             rounds=3, reveal=None, turn=None, versus=False):
+        """versus: one game against the apple player; it ends when the snake eats, crashes,
+        or starves, and the outcome is published for the board."""
         reveal = self.play_reveal if reveal is None else reveal
         turn = self.turn_window if turn is None else turn
-        if policy == "tabpfn" and self.random_runs == 0:
-            raise ValueError("Play random steps first so TabPFN has fresh moves to learn from")
+        if versus and (self.env.state.steps or self.env.state.done or self.outcome):
+            self.new_game()  # A versus game always starts on a fresh board.
+        self.outcome = None
         if policy == "tabpfn" and self.learner.model is None:
             # First Play trains from the saved moves; later runs reuse the fitted model.
             self.fit(rounds)
@@ -371,7 +382,7 @@ class Runner:
                                "Change your mind until TabPFN starts predicting.")
                 if self.stop.wait(turn):
                     break
-            state = self.apply_apple_move() if policy == "tabpfn" else self.env.state
+            state = self.apply_apple_move()
             if policy == "tabpfn":
                 # Greedy: TabPFN's highest value always wins. No exploration.
                 self.set_phase("predicting", f"TabPFN is predicting the value of move {state.steps + 1}…")
@@ -417,7 +428,13 @@ class Runner:
                     state, action, reward, next_state, self.episode_id, self.env.seed, policy
                 )
             )
-            if next_state.done:
+            eaten = reward == 1 and not next_state.done
+            if versus and eaten:
+                self.outcome = "eaten"
+            elif versus and next_state.done:
+                self.outcome = "starved" if next_state.reason == "starvation" else "crashed"
+            ended = next_state.done or eaten  # Eating ends the game in every mode.
+            if ended:
                 self.episodes += 1
                 self.history.append(
                     {
@@ -425,6 +442,7 @@ class Runner:
                         "score": next_state.score,
                         "steps": next_state.steps,
                         "policy": policy,
+                        "outcome": self.outcome,
                     }
                 )
                 log.info("Episode %d over: %s · %d apples · %d moves · %d saved moves total%s",
@@ -432,14 +450,31 @@ class Runner:
                          next_state.steps, len(self.store.rows),
                          f" · player moved the apple {self.apple_moves} times" if self.apple_moves else "")
             self.publish()
-            if next_state.done and stop_after_episode:
-                break
-            if next_state.done and auto_fit and policy == "tabpfn" and self.episodes % 5 == 0:
+            if ended and auto_fit and policy == "tabpfn" and self.episodes % 5 == 0:
                 log.info("Refitting after episode %d", self.episodes)
-                self.fit(1)
+                self.fit(1, "Learning from that game…")
+            if ended and (stop_after_episode or versus):
+                break
+            if eaten:
+                self.new_game()
+                log.info("The snake ate: new game on seed %d", self.env.seed)
             if self.stop.wait(delay):
                 break
-        self.message = "Paused." if self.stop.is_set() else "Run finished. Experience saved."
+        if self.stop.is_set():
+            self.message = "Paused."
+        elif self.outcome:
+            self.message = {
+                "eaten": f"Game over: TabPFN ate the apple after {self.moves_text()}.",
+                "starved": "You win: the snake starved.",
+                "crashed": "You win: the snake crashed.",
+            }[self.outcome]
+        else:
+            self.message = "Run finished. Experience saved."
+        self.publish()
+
+    def moves_text(self):
+        steps = self.env.state.steps
+        return f"{steps} move{'' if steps == 1 else 's'}"
 
     @staticmethod
     def square(cell):

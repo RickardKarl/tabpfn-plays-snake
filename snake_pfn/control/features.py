@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from ..game.engine import DIRECTIONS, State, candidate
+from ..game.engine import DIRECTIONS, STARVATION_MOVES, State, candidate
 
 GROUPS = {
     "board": "Ordered board: empty 0, food -1, tail 1 … head N",
@@ -64,7 +64,7 @@ def all_features(state: State, action: int):
             "heading_x": forward[0],
             "heading_y": forward[1],
             "length": len(state.snake),
-            "hunger_fraction": state.hungry / (2 * size**2),
+            "hunger_fraction": state.hungry / STARVATION_MOVES,
         },
         "food": {
             "food_forward": sum(a * b for a, b in zip(delta, forward)),

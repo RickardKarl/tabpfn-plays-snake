@@ -152,10 +152,9 @@ export function setQuery(query, values = null, chosen = null) {
 }
 
 // Dim the table and sweep a light over it while it is uploaded as TabPFN's context.
-export function setLoading(active, text) {
+export function setLoading(active) {
   element('training-table').closest('.table-frame').classList.toggle('loading', active);
   if (active) {
-    element('table-note').textContent = text;
     loadingNote = true;
   } else if (loadingNote) {
     loadingNote = false;
@@ -201,14 +200,6 @@ export async function refreshTable(follow = false) {
       box.scrollTop = Math.max(0, highlighted.offsetTop + highlighted.offsetHeight - box.clientHeight + 8);
     }
 
-    const targetNote = data.round === 1
-      ? 'Round 1 targets are the observed rewards.'
-      : 'Targets add discounted future reward to the observed reward; final moves use the reward alone.';
-    element('table-note').textContent = isFit
-      ? `Training data sent to TabPFN · round ${data.round} · ${data.total} rows sampled from the saved moves. ${targetNote}`
-      : data.total
-        ? `${data.total} saved moves with the selected inputs. Reward: +1 apple, −1 crash or starvation, −0.01 otherwise. Training puts all of them into TabPFN's context.`
-        : 'Play a random game to fill this table.';
     element('table-page').textContent = data.total
       ? `${offset + 1}–${offset + data.rows.length} of ${data.total}` : '0 rows';
     element('table-prev').disabled = offset === 0;
