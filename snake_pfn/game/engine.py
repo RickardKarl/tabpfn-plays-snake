@@ -4,12 +4,16 @@ import random
 from dataclasses import asdict, dataclass
 
 ACTIONS = ("left", "straight", "right")
-DEFAULT_SIZE = 4
+DEFAULT_SIZE = 5
 MIN_SIZE, MAX_SIZE = 4, 16
-STARVATION_MOVES = 20  # Moves without food before the snake starves; the apple's win condition
 START_LENGTH = 4
 DIRECTIONS = ((0, -1), (1, 0), (0, 1), (-1, 0))
 TURNS = (-1, 0, 1)
+
+
+def starvation_limit(size: int) -> int:
+    """Bound fruitless loops to two board traversals, as in the original experiment."""
+    return size * size * 2
 
 
 @dataclass(frozen=True)
@@ -86,7 +90,7 @@ class Snake:
             food = self._food(s.size, body)
             if food is None:
                 reason = "board filled"
-        if reason is None and hungry >= STARVATION_MOVES:
+        if reason is None and hungry >= starvation_limit(s.size):
             reason = "starvation"
         reward = -1.0 if reason in ("collision", "starvation") else (1.0 if eating else -0.01)
         self.state = State(

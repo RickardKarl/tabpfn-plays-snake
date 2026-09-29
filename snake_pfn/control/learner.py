@@ -29,7 +29,7 @@ class HostedRegressor:
         timeout = float(os.getenv("SNAKE_API_TIMEOUT", "20"))
         self.model.set_params(fit_mode="fit_with_cache", client_options=ClientOptions(timeout=timeout))
         self.interval = (
-            float(os.getenv("SNAKE_API_INTERVAL", "0.2")) if interval is None else interval
+            float(os.getenv("SNAKE_API_INTERVAL", "0")) if interval is None else interval
         )
         self.last_call = 0.0
 
@@ -115,6 +115,7 @@ class Learner:
         self.rounds = 0
         self.fit_rows = 0
         self.last_fit_seconds = None
+        self.last_predict_seconds = None
         self.fit_table = None
         self.prediction_table = None
 
@@ -138,12 +139,7 @@ class Learner:
                 log.info("Fit stopped before round %d", self.rounds + 1)
                 break
             started = time.monotonic()
-            step = f"Training TabPFN · round {self.rounds + 1} of {total}"
-            progress(
-                f"{step} · predicting future values for {len(rows)} saved moves…"
-                if self.model is not None
-                else f"{step} · using observed rewards as targets…"
-            )
+            progress(f"Training · round {self.rounds + 1} of {total}…")
             y = bellman_targets(rows, self.model, self.spec, self.gamma)
             log.info("Round %d targets: mean %+.3f · min %+.3f · max %+.3f",
                      self.rounds + 1, y.mean(), y.min(), y.max())
@@ -159,7 +155,6 @@ class Learner:
                 "round": self.rounds + 1,
                 "directions": [candidate(row.state, row.action)[0] for row in rows],
             }
-            progress(f"{step} · fitting {len(rows)} rows × {x.shape[1]} columns…")
             candidate_model.fit(x, y)
             self.model = candidate_model  # Publish only a successful complete fit.
             self.fit_table = table
@@ -171,7 +166,7 @@ class Learner:
         if self.model is not None and not stop():
             # The first prediction against a fresh context pays its setup cost; pay it here,
             # while the player reads the rules, rather than on the first move of the game.
-            progress("Training TabPFN · warming up…")
+            progress("Training · warming up…")
             self.model.predict(x.iloc[:3])
 
     def values(self, states):
@@ -179,7 +174,9 @@ class Learner:
             raise ValueError("Fit TabPFN before selecting the TabPFN player")
         states = list(states)
         frame = self.spec.frame((state, action) for state in states for action in range(3))
+        started = time.monotonic()
         values = np.asarray(self.model.predict(frame)).reshape(-1, 3)
+        self.last_predict_seconds = round(time.monotonic() - started, 2)
         self.prediction_table = {
             "columns": list(frame.columns),
             "rows": frame.to_numpy().tolist(),

@@ -4,96 +4,70 @@ const SEEN = 'snake-pfn.seen-intro';
 const $ = id => document.getElementById(id);
 const n = value => Number(value).toLocaleString();
 
-const PLAY = {moves: 100, policy: 'tabpfn', auto_fit: true, rounds: 3, versus: true};
+const PLAY = {moves: 100, policy: 'tabpfn', auto_fit: true, rounds: 3, stop_after_episode: true};
 const A1 = [0, 0]; // The intro's first apple, top-left.
-
-// Arrow keys around the apple.
-const KEYS = `<svg class="keys" viewBox="0 0 160 124" aria-hidden="true">
-  <g fill="#24382e" stroke="#4a6b58" stroke-width="1.5">
-    <rect x="60" y="2" width="40" height="30" rx="6"/><rect x="14" y="45" width="40" height="30" rx="6"/>
-    <rect x="106" y="45" width="40" height="30" rx="6"/><rect x="60" y="90" width="40" height="30" rx="6"/>
-  </g>
-  <g fill="#e6ecdf" font-size="18" text-anchor="middle" font-family="system-ui, sans-serif">
-    <text x="80" y="24">↑</text><text x="34" y="67">←</text><text x="126" y="67">→</text><text x="80" y="112">↓</text>
-  </g>
-  <circle cx="80" cy="61" r="11" fill="#edb16d"/>
-  <path d="M81 51 l4 -5" stroke="#ffdbab" stroke-width="2.5" stroke-linecap="round"/>
-</svg>`;
 
 const STEPS = [
   {
     id: 'hook', place: 'center', lit: [],
-    title: 'Can you outsmart TabPFN?',
-    body: () => `<p>TabPFN plays the snake. <strong>You</strong> play the apple.</p>
-      <p class="live"><span class="live-dot"></span>Live demo: every snake move is a real call to TabPFN.</p>`,
-    next: 'Show me how',
+    title: 'Snake, played by TabPFN',
+    body: c => `<p>First we record some random moves. Then TabPFN uses that table to choose where to go.</p>
+      <p class="live"><span class="live-dot"></span>${c.model_mode === 'stub' ? 'Debug: simulated predictions' : 'Live: every move calls TabPFN'}</p>`,
+    next: 'Show me',
   },
   {
     // The intro always starts from an empty table (earlier moves are archived, not deleted)
     // and a fresh board with the apple in A1.
-    id: 'opponent', place: 'bottom', lit: ['game-panel'],
+    id: 'meet', place: 'bottom', lit: ['game-panel', 'data-view'],
     enter: c => [...(c.rows ? [['clear', {}]] : []), ['reset', {food: A1}]],
-    title: 'This is the board.',
-    body: () => '<p>TabPFN will steer the snake. But TabPFN is a tabular model: it does not see pixels or rules. It sees a table.</p>',
-  },
-  {
-    id: 'table', place: 'bottom', lit: ['data-view'],
-    title: 'This is everything TabPFN knows about Snake.',
-    body: () => '<p>Nothing. The table is empty.</p>',
+    title: 'The board becomes numbers',
+    body: () => '<p>TabPFN reads a table of moves and rewards. Let’s put a few moves in it.</p>',
     next: 'Watch a few moves',
   },
   {
-    // Auto-completes when the six moves are in, then waits for a click so the jump to
+    // Auto-completes when the moves are in, then waits for a click so the jump to
     // fast practice is a decision the player makes, not something that happens to them.
     id: 'demo', place: 'bottom', lit: ['game-panel', 'data-view'], auto: true,
-    title: 'Every move becomes one row.',
-    body: () => '<p>The board before the move, the turn it took, and what it earned. Watch the table fill.</p>',
-    enter: () => [['random-steps', {moves: 6, delay: 1.2, food: A1}]],
+    title: 'Every move becomes a row',
+    body: () => '<p>We save what the board looked like, which turn the snake took, and the reward it earned.</p>',
+    enter: () => [['random-steps', {moves: 5, delay: 0.7, food: A1}]],
     done: c => c.job === null,
     then: {
-      title: 'Six moves. Six rows.',
-      body: c => `<p>Not much to learn from yet. TabPFN needs to see far more than a handful of moves before it can play, so let it watch on its own, much faster.</p>
-        <p class="progress">${n(c.rows)} rows so far.</p>`,
-      next: c => `Let it watch ${n(c.practice_moves)} moves`,
+      title: c => `${n(c.rows)} moves, ${n(c.rows)} rows`,
+      body: () => '<p>Let’s collect more examples before TabPFN takes over.</p>',
+      next: c => `Watch ${n(c.practice_moves)} moves`,
     },
   },
   {
     // Random moves until the table is long enough, then wait for a click before training.
     id: 'practice', place: 'bottom', lit: ['game-panel', 'data-view'], auto: true,
-    title: 'Watching random moves.',
-    body: c => `<p class="counter"><strong>${n(c.rows)}</strong> moves seen</p>`,
+    title: 'Collecting moves',
+    body: c => `<p class="counter"><strong>${n(c.rows)}</strong> moves</p>`,
     enter: c => c.rows < c.practice_moves
-      ? [['random-steps', {moves: c.practice_moves - c.rows, delay: 0.01}]] : null,
+      ? [['random-steps', {moves: c.practice_moves - c.rows, delay: 0.003}]] : null,
     done: c => c.job === null,
     then: {
-      title: c => `${n(c.rows)} moves seen.`,
-      body: () => '<p>Enough to learn from.</p>',
+      title: c => `${n(c.rows)} moves`,
+      body: () => '<p>Now we can use these moves to fit TabPFN.</p>',
       next: 'Next',
     },
   },
   {
     // Training starts quietly on entry; the card is only about the rules.
     id: 'rules', place: 'center', lit: [],
-    enter: c => (c.fitted ? null : [['fit', {rounds: 3}]]),
-    title: 'Game rules',
-    body: c => `<ol>
-        <li>TabPFN moves the snake, one live prediction per move. You move the apple.</li>
-        <li>After each snake move, step the apple with the arrow keys or tap a neighbouring square.</li>
-        <li>Survive ${c.hunger_limit} moves without getting eaten.</li>
-      </ol>
-      ${KEYS}`,
-    next: 'Got it',
-  },
-  {
-    id: 'ready', place: 'center', lit: [],
-    title: 'Are you ready?',
-    body: () => '',
-    next: 'Play',
+    enter: c => [['reset', {}], ...(c.fitted ? [] : [['fit', {rounds: 3}]])],
+    title: 'The rules',
+    body: c => `<ul>
+        <li>TabPFN scores all three turns. The snake takes the highest score.</li>
+        <li>Each apple adds a point and makes the snake longer.</li>
+        <li>Walls, its own body, or ${c.hunger_limit} moves without food end the game.</li>
+      </ul>`,
+    next: 'Watch TabPFN play',
   },
   {
     // Only seen when Play is pressed while training is still running; the game starts by itself.
     id: 'waiting', place: 'center', lit: [], auto: true, finish: true,
-    title: 'Awaiting TabPFN initialization…',
+    title: 'Getting TabPFN ready…',
     body: () => '',
     enter: c => (c.fitted || c.job ? null : [['fit', {rounds: 3}]]),
     done: c => c.job === null && c.fitted,
@@ -103,7 +77,7 @@ const index = id => STEPS.findIndex(s => s.id === id);
 
 let deps = null, current = null, step = null, armed = false, error = null, completed = false;
 
-function panels() { return ['game-panel', 'data-view', 'log-view'].map(id => $(id)); }
+function panels() { return ['game-panel', 'data-view'].map(id => $(id)); }
 
 function paint() {
   const card = $('tour');

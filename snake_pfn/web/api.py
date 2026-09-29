@@ -22,16 +22,11 @@ class PlayRequest(BaseModel):
     epsilon: float = Field(default=0.1, ge=0, le=1)  # Baseline policies only; TabPFN is greedy.
     auto_fit: bool = True
     rounds: int = Field(default=3, ge=1, le=10)
-    versus: bool = False  # One game against the apple player, ending when the snake eats
+    stop_after_episode: bool = False  # Stop on collision, starvation, or a full board
 
 
 class FitRequest(BaseModel):
     rounds: int = Field(default=3, ge=1, le=10)
-
-
-class AppleRequest(BaseModel):
-    x: int = Field(ge=0, le=15)
-    y: int = Field(ge=0, le=15)
 
 
 Cell = tuple[int, int]
@@ -114,10 +109,6 @@ def create_app(data_dir="data", runner=None):
     @app.post("/api/play")
     def play(body: PlayRequest):
         return command(lambda: runner.launch("playing", lambda: runner.play(**body.model_dump())))
-
-    @app.post("/api/apple")
-    def apple(body: AppleRequest):
-        return command(lambda: runner.move_apple((body.x, body.y)))
 
     @app.post("/api/pause")
     def pause():

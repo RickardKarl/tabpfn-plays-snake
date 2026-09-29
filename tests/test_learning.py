@@ -26,7 +26,11 @@ def test_feature_presets_and_individual_columns():
     assert len(FeatureSpec.read("board").row(state, 1)) == 30  # 25 cells + 4 context + action
     assert len(FeatureSpec.read("compact").row(state, 1)) == 16
     assert len(FeatureSpec.read("augmented").row(state, 1)) == 41
-    assert len(FeatureSpec.read("board").row(Snake().state, 1)) == 21  # 16 cells on 4 × 4
+    assert len(FeatureSpec.read("board").row(Snake(size=4).state, 1)) == 21  # 16 cells on 4 × 4
+    assert list(FeatureSpec.read("outcomes").row(Snake(size=4).state, 1)) == [
+        "action", "will_crash", "will_eat", "closer_to_apple", "room_left"
+    ]
+    assert len(FeatureSpec.read("board_outcomes").row(Snake(size=4).state, 1)) == 21
     spec = FeatureSpec(("food", "context"), ("will_eat",))
     row = spec.row(state, 1)
     assert "will_eat" not in row and "cell_0_0" not in row and row["action"] == 1
@@ -35,6 +39,21 @@ def test_feature_presets_and_individual_columns():
         FeatureSpec(exclude=("action",))
     with pytest.raises(ValueError, match="Unknown excluded"):
         FeatureSpec(exclude=("typo",)).row(state, 0)
+
+
+def test_outcome_features_describe_the_candidate_move():
+    # 4 × 4 start: head (2, 2) heading right, body (1, 2), (0, 2), (0, 1).
+    state = replace(Snake(size=4).state, food=(3, 2))
+    straight = all_features(state, 1)["outcome"]
+    assert straight == {"will_crash": 0, "will_eat": 1, "closer_to_apple": 1,
+                        "room_left": straight["room_left"]}
+    assert straight["room_left"] > 0
+    left = all_features(state, 0)["outcome"]  # Up, away from the apple.
+    assert left["closer_to_apple"] == -1 and left["will_eat"] == 0
+    edge = replace(state, snake=((3, 2), (2, 2), (1, 2), (0, 2)), food=(0, 0))
+    crash = all_features(edge, 1)["outcome"]
+    assert crash["will_crash"] == 1 and crash["room_left"] == 0
+    assert all_features(replace(state, food=None), 1)["outcome"]["closer_to_apple"] == 0
 
 
 def test_features_use_only_current_state_and_do_not_touch_rng():

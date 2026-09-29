@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from ..game.engine import DIRECTIONS, STARVATION_MOVES, State, candidate
+from ..game.engine import DIRECTIONS, State, candidate, starvation_limit
 
 GROUPS = {
     "board": "Ordered board: empty 0, food -1, tail 1 … head N",
@@ -15,11 +15,14 @@ GROUPS = {
     "food": "Food position relative to the head and candidate move",
     "danger": "Immediate collision in each direction and for this move",
     "space": "Reachable space after the candidate move (static-body approximation)",
+    "outcome": "What this move leads to: a crash, the apple, closer to it, and room left",
 }
 PRESETS = {
     "board": ("board", "context"),
     "compact": ("context", "food", "danger", "space"),
-    "augmented": tuple(GROUPS),
+    "augmented": ("board", "context", "food", "danger", "space"),
+    "outcomes": ("outcome",),
+    "board_outcomes": ("board", "outcome"),
 }
 
 
@@ -40,6 +43,15 @@ def reachable(size, head, body):
                 seen.add(cell)
                 queue.append(cell)
     return len(seen)
+
+
+def delta_distance(food, head, next_head):
+    """+1 if the move steps toward the apple, −1 if away, 0 when there is no apple."""
+    if food is None:
+        return 0
+    before = abs(food[0] - head[0]) + abs(food[1] - head[1])
+    after = abs(food[0] - next_head[0]) + abs(food[1] - next_head[1])
+    return before - after
 
 
 def all_features(state: State, action: int):
@@ -64,7 +76,7 @@ def all_features(state: State, action: int):
             "heading_x": forward[0],
             "heading_y": forward[1],
             "length": len(state.snake),
-            "hunger_fraction": state.hungry / STARVATION_MOVES,
+            "hunger_fraction": state.hungry / starvation_limit(state.size),
         },
         "food": {
             "food_forward": sum(a * b for a, b in zip(delta, forward)),
@@ -80,12 +92,19 @@ def all_features(state: State, action: int):
             "will_collide": int(collision),
         },
         "space": {"reachable_cells": free, "space_per_segment": free / len(body)},
+        # Four plain questions about the move; will_eat is shared with "food".
+        "outcome": {
+            "will_crash": int(collision),
+            "will_eat": int(eating),
+            "closer_to_apple": delta_distance(state.food, (x, y), head),
+            "room_left": free,
+        },
     }
 
 
 @dataclass(frozen=True)
 class FeatureSpec:
-    groups: tuple[str, ...] = PRESETS["augmented"]
+    groups: tuple[str, ...] = PRESETS["board_outcomes"]
     exclude: tuple[str, ...] = ()
 
     def __post_init__(self):

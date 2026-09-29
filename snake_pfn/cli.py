@@ -5,7 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from .control.experience import Store, collect
-from .control.features import FeatureSpec
+from .control.features import PRESETS, FeatureSpec
 from .control.learner import Learner, evaluate
 
 
@@ -31,7 +31,7 @@ def main():
     for name in ("export", "train", "compare"):
         cmd = sub.add_parser(name)
         if name != "compare":
-            cmd.add_argument("--features", default="augmented", help="Preset name or JSON config")
+            cmd.add_argument("--features", default="board_outcomes", help="Preset name or JSON config")
         if name in ("train", "compare"):
             cmd.add_argument("--rounds", type=positive, default=3)
             cmd.add_argument("--max-rows", type=positive, default=None,
@@ -101,7 +101,7 @@ def main():
             "results": {},
         }
         result["results"]["heuristic"] = evaluate(None, args.episodes, args.seed)
-        for preset in ("board", "compact", "augmented"):
+        for preset in PRESETS:
             print(f"Fitting and evaluating {preset}…", flush=True)
             learner = Learner(FeatureSpec.read(preset), max_rows=args.max_rows)
             learner.fit(store.rows, rounds=args.rounds)
