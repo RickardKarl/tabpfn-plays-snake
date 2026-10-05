@@ -4,6 +4,7 @@ from dataclasses import replace
 import numpy as np
 from fastapi.testclient import TestClient
 
+from snake_pfn.control.experience import collect
 from snake_pfn.control.runner import Runner
 from snake_pfn.web.api import create_app
 
@@ -13,22 +14,22 @@ def finish(runner):
     assert not runner.worker.is_alive()
 
 
-def test_full_local_flow_and_feature_invalidation(tmp_path):
+def seed(runner, episodes):
+    """Fill the table with heuristic seed games without going through the API."""
+    start = max((r.seed for r in runner.store.rows), default=99) + 1
+    collect(runner.store, episodes, start, runner.size)
+    runner.publish()
+
+
+def test_full_local_flow(tmp_path):
     runner = Runner(tmp_path)
     with TestClient(create_app(runner=runner)) as client:
         page = client.get("/")
         assert page.status_code == 200 and page.headers["cache-control"] == "no-cache"
         assert "cache-control" not in client.get("/api/state").headers
-        assert client.get("/api/features").json()["presets"]["board"] == ["board", "context"]
-        assert client.post("/api/collect", json={"episodes": 2}).status_code == 200
-        finish(runner)
+        seed(runner, 2)
         rows = client.get("/api/state").json()["rows"]
         assert rows >= 10
-        runner.learner.model = object()  # Stand-in for previously fitted state.
-        response = client.post("/api/features", json={"groups": ["food"], "exclude": ["will_eat"]})
-        assert response.status_code == 200
-        data = response.json()
-        assert data["rows"] == rows and not data["fitted"] and len(data["columns"]) == 5
         assert client.post("/api/play", json={"moves": 1}).status_code == 200
         finish(runner)
         assert client.get("/api/state").json()["rows"] == rows + 1
@@ -46,7 +47,6 @@ def test_busy_runner_rejects_mutations_but_allows_reads_and_pause(tmp_path):
             assert client.get("/api/state").json()["job"] == "test"
             assert client.post("/api/reset").status_code == 409
             assert client.post("/api/clear").status_code == 409
-            assert client.post("/api/features", json={"groups": ["food"]}).status_code == 409
             assert client.post("/api/play", json={}).status_code == 409
             assert client.post("/api/pause").status_code == 200
             assert runner.stop.is_set()
@@ -63,8 +63,6 @@ def test_missing_model_error_and_validation(tmp_path):
         data = client.get("/api/state").json()
         assert "at least 10" in data["error"] and data["rows"] == 0 and data["job"] is None
         assert client.post("/api/play", json={"moves": -2}).status_code == 422
-        assert client.post("/api/features", json={"groups": ["future_reward"]}).status_code == 409
-        assert client.post("/api/features", json={"groups": []}).status_code == 409
 
 
 def test_pause_during_prediction_does_not_execute_or_log_move(tmp_path):
@@ -90,68 +88,31 @@ def test_pause_during_prediction_does_not_execute_or_log_move(tmp_path):
     assert runner.q_values is None and runner.last_action is None
 
 
-def test_inspection_uses_actual_fit_and_prediction_without_model_calls(tmp_path):
-    class RecordingModel:
-        def __init__(self):
-            self.calls = 0
-
-        def fit(self, x, y):
-            self.x, self.y = x.copy(), y.copy()
-
+def test_table_shows_saved_moves_as_model_inputs_without_model_calls(tmp_path):
+    class NoCalls:
         def predict(self, x):
-            self.calls += 1
-            self.query = x.copy()
-            return x["action"].to_numpy() * 0.25
+            raise AssertionError("The table must not call the model")
 
     runner = Runner(tmp_path)
-    runner.learner.factory = RecordingModel
+    runner.learner.model = NoCalls()
     with TestClient(create_app(runner=runner)) as client:
         assert client.get("/api/table").json()["total"] == 0
-        runner.collect(3)
-        preview = client.get("/api/table?offset=2&limit=3").json()
-        assert preview["source"] == "preview" and preview["targets"] == [None] * 3
-        expected = [
-            list(runner.learner.spec.row(r.state, r.action).values())
-            for r in runner.store.rows[2:5]
+        seed(runner, 3)
+        page = client.get("/api/table?offset=2&limit=3").json()
+        spec = runner.learner.spec
+        assert page["columns"] == list(spec.row(runner.env.state, 1))
+        assert page["rows"] == [
+            list(spec.row(r.state, r.action).values()) for r in runner.store.rows[2:5]
         ]
-        assert preview["rows"] == expected
-        runner.learner.fit(runner.store.rows, rounds=2)
-        model = runner.learner.model
-        runner.learner.values([runner.env.state])
-        calls_before = model.calls
-        fitted = client.get("/api/table?offset=2&limit=3").json()
-        assert fitted["source"] == "fit" and fitted["round"] == 2
-        assert fitted["columns"] == list(model.x)
-        assert fitted["rows"] == model.x.iloc[2:5].to_numpy().tolist()
-        assert fitted["targets"] == model.y[2:5].tolist()
-        assert fitted["rewards"] == [r.reward for r in runner.store.rows[2:5]]  # whole log, in order
-        # While a game runs the UI asks for the saved moves even though a model is fitted.
-        saved = client.get("/api/table?source=experience&latest=true&limit=4").json()
+        assert page["rewards"] == [r.reward for r in runner.store.rows[2:5]]
+        # While a game runs the UI follows the latest saved move.
+        latest = client.get("/api/table?latest=true&limit=4").json()
         total = len(runner.store.rows)
-        assert saved["source"] == "preview" and saved["total"] == total
-        assert saved["offset"] == ((total - 1) // 4) * 4
-        assert saved["latest_index"] == total - 1
-        assert saved["rewards"] == [r.reward for r in runner.store.rows[saved["offset"] :]]
-        assert saved["prediction"] is not None  # The last prediction stays visible.
-        assert fitted["prediction"]["rows"] == model.query.to_numpy().tolist()
-        assert fitted["prediction"]["values"] == [0, 0.25, 0.5]
-        assert model.calls == calls_before
-        # New experience does not change what the last successful fit received.
-        runner.collect(1)
-        assert client.get("/api/table?offset=2&limit=3").json() == fitted
+        assert latest["total"] == total and latest["offset"] == ((total - 1) // 4) * 4
+        assert latest["latest_index"] == total - 1
+        assert latest["rewards"] == [r.reward for r in runner.store.rows[latest["offset"] :]]
         assert client.get("/api/table?offset=-1").status_code == 422
         assert client.get("/api/table?limit=1001").status_code == 422
-        client.post("/api/features", json={"groups": ["food"]})
-        changed = client.get("/api/table").json()
-        assert changed["source"] == "preview" and changed["prediction"] is None
-        assert changed["columns"] == [
-            "action",
-            "food_forward",
-            "food_right",
-            "food_distance",
-            "next_food_distance",
-            "will_eat",
-        ]
 
 
 def test_random_steps_play_across_games_and_log_every_move(tmp_path):
@@ -162,7 +123,7 @@ def test_random_steps_play_across_games_and_log_every_move(tmp_path):
         finish(runner)
         data = client.get("/api/state").json()
         assert data["job"] is None and data["error"] is None and data["rows"] == 60
-        assert data["episodes"] >= 1
+        assert runner.episodes >= 1
         assert {row.policy for row in runner.store.rows} == {"random"}
         assert data["message"] == "Done."
         table = client.get("/api/table?source=experience&latest=true&limit=5").json()
@@ -188,13 +149,13 @@ def test_play_trains_first_when_no_model_is_fitted(tmp_path):
 
     runner = Runner(tmp_path)
     runner.learner.factory = CountingModel
-    runner.collect(2)
+    seed(runner, 2)
     with TestClient(create_app(runner=runner)) as client:
         body = {"moves": 2, "policy": "tabpfn", "epsilon": 0, "auto_fit": False, "rounds": 2}
         assert client.post("/api/play", json=body).status_code == 200
         finish(runner)
         data = client.get("/api/state").json()
-        assert data["error"] is None and data["fitted"] and data["rounds"] == 2
+        assert data["error"] is None and data["fitted"] and runner.learner.rounds == 2
         assert data["phase"] == "idle" and data["message"] == "Done."
         assert CountingModel.fits == 2
         # The speed readout: the whole fit job, and each answer's time on its frame.
@@ -212,7 +173,7 @@ def test_play_trains_first_when_no_model_is_fitted(tmp_path):
         assert prediction["state"] == query["state"]
         assert prediction["state"]["steps"] + 1 == move["state"]["steps"]
         # The query frame carries the exact rows TabPFN scores, in the table's columns.
-        assert query["query"]["columns"] == runner.snapshot()["columns"]
+        assert query["query"]["columns"] == list(runner.learner.spec.row(runner.env.state, 1))
         assert len(query["query"]["rows"]) == 3 and query["query"]["rows"][0][0] == 0
         assert query["query"]["rows"][2][0] == 2 and len(query["query"]["directions"]) == 3
         assert data["query"] is None  # Cleared once the move is made.
@@ -232,7 +193,7 @@ def test_random_steps_accept_a_bounded_delay(tmp_path):
 
 def test_saved_moves_from_another_board_size_are_archived_on_start(tmp_path):
     first = Runner(tmp_path, size=8)
-    first.collect(1)
+    seed(first, 1)
     assert first.store.rows and first.store.rows[0].state.size == 8
     runner = Runner(tmp_path, size=5)
     assert runner.store.rows == [] and runner.env.state.size == 5
@@ -240,52 +201,12 @@ def test_saved_moves_from_another_board_size_are_archived_on_start(tmp_path):
     assert list(tmp_path.glob("experience-*.jsonl"))
 
 
-def test_event_log_records_jobs_and_moves_and_supports_incremental_polling(tmp_path):
-    runner = Runner(tmp_path)
-    with TestClient(create_app(runner=runner)) as client:
-        first = client.get("/api/log").json()
-        assert first["entries"] and first["entries"][0]["id"] == 1
-        assert any("Loaded 0 saved moves" in e["message"] for e in first["entries"])
-        client.post("/api/random-steps", json={"moves": 60})
-        finish(runner)
-        data = client.get(f"/api/log?after={first['latest']}").json()
-        messages = [e["message"] for e in data["entries"]]
-        assert all(e["id"] > first["latest"] for e in data["entries"])
-        assert any(m.startswith("Job started: random-steps") for m in messages)
-        assert any(m.startswith("Move 1: head C3") for m in messages)
-        assert any(m.startswith("Episode 1 over") for m in messages)
-        assert any(m.startswith("Job finished: random-steps") for m in messages)
-        assert data["latest"] == data["entries"][-1]["id"]
-        assert client.get(f"/api/log?after={data['latest']}").json()["entries"] == []
-        assert client.get("/api/log?after=-1").status_code == 422
-        # Failures are logged with their traceback.
-        def broken_factory():
-            raise RuntimeError("model unavailable in tests")
-
-        runner.learner.factory = broken_factory
-        client.post("/api/play", json={"policy": "tabpfn"})
-        finish(runner)
-        errors = [e for e in client.get("/api/log").json()["entries"] if e["level"] == "error"]
-        assert errors and "Traceback" in errors[-1]["message"]
-
-
-def test_event_log_survives_uvicorn_logging_configuration(tmp_path):
-    import logging.config
-
-    from uvicorn.config import LOGGING_CONFIG
-
-    runner = Runner(tmp_path)
-    before = runner.events.since()["latest"]
-    logging.config.dictConfig(LOGGING_CONFIG)  # Closes all pre-existing handlers.
-    runner.pause()
-    runner.launch("probe", lambda: None)
-    finish(runner)
-    messages = [e["message"] for e in runner.events.since(before)["entries"]]
-    assert any(m.startswith("Job started: probe") for m in messages)
-    runner.events.detach()
-    runner.launch("silent", lambda: None)
-    finish(runner)
-    assert runner.events.since()["entries"][-1]["message"].startswith("Job finished: probe")
+def test_server_start_archives_saved_moves_so_the_intro_replays(tmp_path):
+    seed(Runner(tmp_path), 1)
+    with TestClient(create_app(tmp_path)) as client:
+        state = client.get("/api/state").json()
+        assert state["rows"] == 0 and not state["fitted"]
+    assert list(tmp_path.glob("experience-*.jsonl"))
 
 
 def test_frames_capture_every_board_change_for_smooth_playback(tmp_path):
@@ -298,14 +219,15 @@ def test_frames_capture_every_board_change_for_smooth_playback(tmp_path):
         data = client.get("/api/frames").json()
         seqs = [f["seq"] for f in data["frames"]]
         # One start frame, one per move, and one fresh board per finished game.
-        assert seqs == list(range(1, 60 + 1 + state["episodes"] + 1 - int(state["state"]["done"])))
+        games = runner.episodes
+        assert seqs == list(range(1, 60 + 1 + games + 1 - int(state["state"]["done"])))
         assert data["latest"] == state["seq"] == seqs[-1]
         assert data["frames"][0]["state"]["steps"] == 0 and data["frames"][0]["reward"] is None
         assert data["frames"][0]["kind"] == "reset" and data["frames"][1]["kind"] == "move"
         assert {f["kind"] for f in data["frames"]} == {"reset", "move"}
         assert data["frames"][-1]["state"] == state["state"]
         # Only terminal moves finish a game; eating normally continues it.
-        assert sum(f["kind"] == "move" and f["state"]["done"] for f in data["frames"]) == state["episodes"]
+        assert sum(f["kind"] == "move" and f["state"]["done"] for f in data["frames"]) == games
         assert all(f["q_values"] is None for f in data["frames"])
         assert client.get(f"/api/frames?after={data['latest']}").json()["frames"] == []
         assert client.get(f"/api/frames?after={seqs[-2]}").json()["frames"] == data["frames"][-1:]
@@ -323,7 +245,7 @@ def test_training_reports_progress_messages(tmp_path):
 
     runner = Runner(tmp_path)
     runner.learner.factory = ZeroModel
-    runner.collect(2)
+    seed(runner, 2)
     seen = []
     phases = []
     runner.publish = lambda: (seen.append(runner.message), phases.append(runner.phase),
@@ -349,7 +271,7 @@ def test_eating_grows_snake_and_continues_the_same_episode(tmp_path):
     assert data["state"]["score"] == 1 and data["state"]["steps"] == 1
     assert len(runner.env.state.snake) == initial_length + 1
     assert runner.env.state.food not in runner.env.state.snake
-    assert runner.episode_id == episode and data["episodes"] == 0 and not data["history"]
+    assert runner.episode_id == episode and runner.episodes == 0
     assert runner.store.rows[0].reward == 1 and not runner.store.rows[0].next_state.done
     assert [f["kind"] for f in runner.frames] == ["query", "prediction", "move"]
     # The next prediction uses the grown snake, instead of a fresh board.
@@ -357,7 +279,7 @@ def test_eating_grows_snake_and_continues_the_same_episode(tmp_path):
     data = runner.snapshot()
     assert data["state"]["done"] and data["state"]["reason"] == "collision"
     assert data["state"]["steps"] == 2 and data["state"]["score"] == 1
-    assert data["episodes"] == 1 and data["history"][-1]["score"] == 1
+    assert runner.episodes == 1
     assert runner.store.rows[1].state == runner.store.rows[0].next_state
     assert runner.store.rows[1].episode == episode
     # Final decision survives the end of a game and can be restored on page reload.

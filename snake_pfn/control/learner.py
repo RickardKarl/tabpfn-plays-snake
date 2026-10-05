@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ..game.engine import Snake, candidate
+from ..game.engine import Snake
 from .features import FeatureSpec
 from .policies import heuristic_action
 
@@ -43,7 +43,7 @@ class HostedRegressor:
     def fit(self, x, y):
         self._pace()
         started = time.monotonic()
-        log.info("API fit (%s): %d rows × %d columns", self.version, len(x), x.shape[1])
+        log.info("API fit (%s): %d rows x %d columns", self.version, len(x), x.shape[1])
         self.model.fit(x, y)
         log.info("API fit done in %.2f s", time.monotonic() - started)
         return self
@@ -52,7 +52,7 @@ class HostedRegressor:
         self._pace()
         started = time.monotonic()
         values = np.asarray(self.model.predict(x), dtype=float).reshape(-1)
-        log.info("API predict: %d rows in %.2f s", len(x), time.monotonic() - started)
+        log.debug("API predict: %d rows in %.2f s", len(x), time.monotonic() - started)
         if len(values) != len(x) or not np.isfinite(values).all():
             raise ValueError("TabPFN returned invalid action values")
         return values
@@ -71,14 +71,14 @@ class StubRegressor:
         self.rng = np.random.default_rng()
 
     def fit(self, x, y):
-        log.info("Stub fit: %d rows × %d columns, sleeping %.1f s", len(x), x.shape[1],
+        log.info("Stub fit: %d rows x %d columns, sleeping %.1f s", len(x), x.shape[1],
                  self.fit_seconds)
         time.sleep(self.fit_seconds)
         return self
 
     def predict(self, x):
         time.sleep(self.predict_seconds)
-        log.info("Stub predict: %d rows, random values", len(x))
+        log.debug("Stub predict: %d rows, random values", len(x))
         return self.rng.uniform(-0.6, 0.7, len(x))
 
 
@@ -114,10 +114,7 @@ class Learner:
         self.model = None
         self.rounds = 0
         self.fit_rows = 0
-        self.last_fit_seconds = None
         self.last_predict_seconds = None
-        self.fit_table = None
-        self.prediction_table = None
 
     def fit(self, experience, rounds=1, seed=42, stop=lambda: False, progress=lambda text: None):
         if len(experience) < 10:
@@ -131,7 +128,7 @@ class Learner:
             else experience  # Whole log: every saved move is in TabPFN's context.
         )
         x = self.spec.frame((r.state, r.action) for r in rows)
-        log.info("Sampled %d of %d saved moves → %d columns: %s",
+        log.info("Sampled %d of %d saved moves -> %d columns: %s",
                  len(rows), len(experience), x.shape[1], ", ".join(x.columns))
         total = self.rounds + rounds
         for _ in range(rounds):
@@ -141,28 +138,17 @@ class Learner:
             started = time.monotonic()
             progress(f"Training · round {self.rounds + 1} of {total}…")
             y = bellman_targets(rows, self.model, self.spec, self.gamma)
-            log.info("Round %d targets: mean %+.3f · min %+.3f · max %+.3f",
+            log.info("Round %d targets: mean %+.3f, min %+.3f, max %+.3f",
                      self.rounds + 1, y.mean(), y.min(), y.max())
             if stop():
                 break
             # Always create a fresh estimator. The previous Q stays frozen for targets.
             candidate_model = self.factory()
-            table = {
-                "columns": list(x.columns),
-                "rows": x.to_numpy().tolist(),
-                "targets": y.tolist(),
-                "rewards": [row.reward for row in rows],
-                "round": self.rounds + 1,
-                "directions": [candidate(row.state, row.action)[0] for row in rows],
-            }
             candidate_model.fit(x, y)
             self.model = candidate_model  # Publish only a successful complete fit.
-            self.fit_table = table
-            self.prediction_table = None
             self.rounds += 1
             self.fit_rows = len(rows)
-            self.last_fit_seconds = round(time.monotonic() - started, 2)
-            log.info("Round %d fitted in %.2f s", self.rounds, self.last_fit_seconds)
+            log.info("Round %d fitted in %.2f s", self.rounds, time.monotonic() - started)
         if self.model is not None and not stop():
             # The first prediction against a fresh context pays its setup cost; pay it here,
             # while the player reads the rules, rather than on the first move of the game.
@@ -177,13 +163,6 @@ class Learner:
         started = time.monotonic()
         values = np.asarray(self.model.predict(frame)).reshape(-1, 3)
         self.last_predict_seconds = round(time.monotonic() - started, 2)
-        self.prediction_table = {
-            "columns": list(frame.columns),
-            "rows": frame.to_numpy().tolist(),
-            "values": values.reshape(-1).tolist(),
-            "round": self.rounds,
-            "directions": [candidate(state, action)[0] for state in states for action in range(3)],
-        }
         return values
 
     def save(self, path):

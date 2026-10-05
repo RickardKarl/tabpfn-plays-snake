@@ -104,7 +104,7 @@ def all_features(state: State, action: int):
 
 @dataclass(frozen=True)
 class FeatureSpec:
-    groups: tuple[str, ...] = PRESETS["board_outcomes"]
+    groups: tuple[str, ...] = PRESETS["outcomes"]
     exclude: tuple[str, ...] = ()
 
     def __post_init__(self):

@@ -8,6 +8,7 @@ const LETTERS = 'ABCDEFGHIJKLMNOP';
 const CRASH = '#ff6eb4';
 let current, pending = false, connected = false;
 let answerSeconds = null; // TabPFN's answer time for the prediction on the board
+let askedAt = null; // When the query on the board was shown, to count up until the answer
 
 // The server records a frame for every board change. The browser fetches them in
 // batches and shows them one by one, holding on predictions so they can be read.
@@ -30,30 +31,40 @@ function showError(message) {
   $('error').textContent = message || '';
 }
 
-// Speed is the point of the demo: how long learning took, and how long each answer takes.
+// Speed is the point of the demo: how long each answer takes, counted live while pending.
+// During a TabPFN game a Live tag leads the line; its dot pulses while a request is out.
 function renderSpeed() {
-  const learned = current?.fitted && current.learn_seconds != null;
-  const answer = answerSeconds ?? current?.predict_seconds;
-  $('speed').hidden = !learned;
-  if (!learned) return;
-  const text = `Learned from <strong>${current.learn_rows.toLocaleString()}</strong> moves in `
-    + `<strong>${current.learn_seconds.toFixed(1)} s</strong>`
-    + (answer != null ? ` · answered in <strong>${answer.toFixed(2)} s</strong>` : '');
+  // A replayed answer may already be queued: never count past its real time.
+  const known = queue.find(frame => frame.kind === 'prediction')?.seconds ?? Infinity;
+  const answer = view.pending && askedAt != null
+    ? Math.min((performance.now() - askedAt) / 1000, known)
+    : answerSeconds ?? current?.predict_seconds;
+  $('speed').hidden = answer == null;
+  if (answer == null) return;
+  const live = !!current && (current.job === 'playing' || view.pending
+    || queue.some(frame => frame.kind === 'query' || frame.kind === 'prediction'));
+  const tag = live ? `<span class="live-tag"><i></i>${current.model_mode === 'stub' ? 'Stub' : 'Live'}</span>` : '';
+  const text = tag + (view.pending ? 'TabPFN is answering… ' : 'TabPFN answered in ')
+    + `<strong>${answer.toFixed(2)} s</strong>`;
+  $('speed').classList.toggle('asking', view.pending);
   if ($('speed').innerHTML !== text) $('speed').innerHTML = text;
 }
+
+// The server can finish a game before the board has replayed it; until it catches up,
+// the page still describes the game as playing.
+const replaying = () => !!current && !current.job && (queue.length > 0 || view.pending);
 
 function render() {
   if (!current) return;
   renderSpeed();
-  const busy = pending || !!current.job || !connected;
+  const playing = !!current.job || replaying();
+  const busy = pending || playing || !connected;
   $('clear').disabled = busy;
-  $('play').disabled = pending || !connected || (!current.job && !current.has_token);
-  $('play').textContent = current.job ? 'Stop' : current.state.done ? 'Play again' : current.state.steps ? 'Continue' : 'Watch TabPFN play';
+  $('play').disabled = pending || !connected || (!playing && !current.has_token);
+  $('play').textContent = playing ? 'Stop' : current.state.done ? 'Play again' : current.state.steps ? 'Continue' : 'Watch TabPFN play';
   $('memory').textContent = `${current.rows.toLocaleString()} saved moves`;
   $('setup').hidden = current.has_token;
   $('mode-badge').hidden = current.model_mode !== 'stub';
-  $('game-status').textContent = current.message;
-  $('game-status').title = current.message;
   if (!current.rows && !current.query) setQuery(null);
   if (current.error) showError(current.error);
   renderOverlay();
@@ -79,12 +90,14 @@ function show(frame, now) {
       break;
     case 'query':
       Object.assign(view, {state: frame.state, pending: true, q: null});
+      askedAt = now;
       setQuery(frame.query);
       break;
     case 'prediction':
       answerSeconds = frame.seconds;
-      renderSpeed();
+      askedAt = null;
       Object.assign(view, {state: frame.state, pending: false, q: frame.q_values, action: frame.action, revealAt: now});
+      renderSpeed();
       setQuery(frame.query, frame.q_values, frame.action);
       break;
     default: // move
@@ -286,10 +299,16 @@ function tick(now) {
     lastShownAt = now;
     if (frame.kind === 'query') holdUntil = now + 200;
     if (frame.kind === 'prediction') holdUntil = now + 450;
+    if (!queue.length && !current?.job) render(); // Caught up with a finished game.
   }
   if (view.pending && !queue.length && current && !current.job && !current.query) {
     view.pending = false;
     setQuery(null); // A stopped or failed request has no prediction to show.
+    render();
+  }
+  if (view.pending || askedAt != null) {
+    if (!view.pending) askedAt = null;
+    renderSpeed();
   }
   paint(now);
   requestAnimationFrame(tick);
@@ -301,7 +320,7 @@ async function refresh() {
   connected = true;
   render();
   await refreshFrames();
-  await refreshTable(['random-steps', 'preparing', 'playing'].includes(current.job));
+  await refreshTable(['random-steps', 'playing'].includes(current.job));
 }
 
 async function command(path, body = {}) {
@@ -323,6 +342,7 @@ $('clear').onclick = async () => {
 };
 $('play').onclick = () => {
   if (current.job) return command('pause');
+  if (replaying()) { queue.splice(0, queue.length - 1); holdUntil = 0; return; } // Skip to the end.
   if (current.fitted) return tour.play();
   tour.begin('practice'); // Prepare first; the tour card shows progress and the rules.
 };

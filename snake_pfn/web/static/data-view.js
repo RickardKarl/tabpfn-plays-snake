@@ -177,7 +177,7 @@ export async function refreshTable(follow = false) {
   try {
     const query = follow ? `latest=true&limit=${pageSize}` : `offset=${offset}&limit=${pageSize}`;
     // Always the observed rewards, never the fitted targets, so the last column means one thing.
-    const response = await fetch(`/api/table?source=experience&${query}`);
+    const response = await fetch(`/api/table?${query}`);
     if (!response.ok) throw new Error('Could not load the data table.');
     const data = await response.json();
     if (follow) {

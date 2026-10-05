@@ -2,18 +2,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from ..control.features import FeatureSpec
 from ..control.runner import Runner
-
-
-class FeatureRequest(BaseModel):
-    groups: list[str]
-    exclude: list[str] = Field(default_factory=list)
 
 
 class PlayRequest(BaseModel):
@@ -42,19 +36,14 @@ class ResetRequest(BaseModel):
     food: Cell | None = None
 
 
-class CollectRequest(BaseModel):
-    episodes: int = Field(default=20, ge=1, le=200)
-
-
 def create_app(data_dir="data", runner=None):
-    load_dotenv()
-    runner = runner or Runner(data_dir)
+    load_dotenv(find_dotenv(usecwd=True))  # The .env next to where you run the server
+    runner = runner or Runner(data_dir, fresh=True)  # A restarted server replays the intro
 
     @asynccontextmanager
     async def lifespan(app):
         yield
         runner.pause()
-        runner.events.detach()
 
     app = FastAPI(title="Snake / TabPFN", lifespan=lifespan)
 
@@ -77,33 +66,19 @@ def create_app(data_dir="data", runner=None):
     def state():
         return runner.snapshot()
 
-    @app.get("/api/features")
-    def features():
-        return runner.catalog()
-
     @app.get("/api/frames")
     def frames(after: int = Query(0, ge=0), limit: int = Query(600, ge=1, le=600)):
         return runner.frames_since(after, limit)
 
-    @app.get("/api/log")
-    def event_log(after: int = Query(0, ge=0), limit: int = Query(500, ge=1, le=1000)):
-        return runner.events.since(after, limit)
-
     @app.get("/api/table")
     def table(offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100),
-              source: Literal["auto", "experience"] = "auto", latest: bool = False):
-        return runner.table(offset, limit, source, latest)
+              latest: bool = False):
+        return runner.table(offset, limit, latest)
 
     @app.post("/api/random-steps")
     def random_steps(body: RandomStepsRequest):
         return command(
             lambda: runner.launch("random-steps", lambda: runner.random_steps(body.moves, body.delay, body.food))
-        )
-
-    @app.post("/api/features")
-    def configure(body: FeatureRequest):
-        return command(
-            lambda: runner.configure(FeatureSpec(tuple(body.groups), tuple(body.exclude)))
         )
 
     @app.post("/api/play")
@@ -118,10 +93,6 @@ def create_app(data_dir="data", runner=None):
     @app.post("/api/reset")
     def reset(body: ResetRequest | None = None):
         return command(lambda: runner.reset(body.food if body else None))
-
-    @app.post("/api/collect")
-    def collect(body: CollectRequest):
-        return command(lambda: runner.launch("collecting", lambda: runner.collect(body.episodes)))
 
     @app.post("/api/fit")
     def fit(body: FitRequest):

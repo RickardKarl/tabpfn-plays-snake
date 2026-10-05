@@ -114,16 +114,8 @@ def test_bellman_terminal_mask_and_frozen_previous_model(tmp_path):
     assert set(created[0].y) == {-1, 1}
     assert set(created[1].y) == {-1, 3}
     assert list(created[0].x) == list(created[1].x)
-    assert learner.fit_table["columns"] == list(created[1].x)
-    assert learner.fit_table["rows"] == created[1].x.to_numpy().tolist()
-    assert learner.fit_table["targets"] == created[1].y.tolist()
-    assert learner.fit_table["round"] == 2
-    assert learner.values([state]).shape == (1, 3)
-    assert (
-        learner.prediction_table["rows"]
-        == spec.frame((state, a) for a in range(3)).to_numpy().tolist()
-    )
-    assert learner.prediction_table["values"] == [0, 2, 4]
+    assert learner.rounds == 2
+    assert learner.values([state]).tolist() == [[0, 2, 4]]
 
 
 def test_failed_fit_keeps_previous_model():
@@ -132,7 +124,6 @@ def test_failed_fit_keeps_previous_model():
     learner = Learner(factory=ActionRegressor)
     learner.fit([row] * 10)
     previous = learner.model
-    previous_table = learner.fit_table
 
     def fail():
         raise RuntimeError("API unavailable")
@@ -141,7 +132,6 @@ def test_failed_fit_keeps_previous_model():
     with pytest.raises(RuntimeError, match="unavailable"):
         learner.fit([row] * 10)
     assert learner.model is previous and learner.rounds == 1
-    assert learner.fit_table is previous_table
 
 
 def test_hosted_adapter_requires_token_and_pins_version(monkeypatch):
