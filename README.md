@@ -1,6 +1,5 @@
 # Snake / TabPFN
 
-<!-- TODO: record a short GIF of the game and save it as docs/demo.gif -->
 ![TabPFN playing Snake](docs/demo.gif)
 
 **TabPFN learns to play Snake from a table of past moves, without any gradient training.**
