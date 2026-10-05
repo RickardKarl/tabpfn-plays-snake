@@ -45,6 +45,9 @@ You need Python 3.11–3.14 and [uv](https://docs.astral.sh/uv/getting-started/i
 
    On the first run it asks for your API key and offers to save it to `.env`.
 
+It uses the TabPFN model `v3.5-fast` by default. To use the full model instead, add
+`SNAKE_MODEL_VERSION=v3.5` to `.env`.
+
 A guided tour starts on the first visit. Every server start begins with a fresh table; the
 previous one is backed up in `data/`.
 
