@@ -2,7 +2,7 @@
 
 ![TabPFN playing Snake](docs/demo.gif)
 
-It's a hard setting for a tabular model: consecutive moves depend on each other, so the
+Snake is a hard task for a tabular model: consecutive moves depend on each other, so the
 rows aren't i.i.d.; positive rewards are rare; and TabPFN sees only 1,000 random moves
 before its first game.
 
