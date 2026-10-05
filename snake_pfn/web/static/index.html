@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Snake / TabPFN</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main>
+  <div class="demo-stage">
+  <header>
+    <span id="mode-badge" class="badge" hidden>Test mode · no TabPFN calls</span>
+    <a class="learn-more" href="#how-it-works" aria-label="Scroll down to how the demo works">
+      <span>How it works</span>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v16m-6-6 6 6 6-6"/></svg>
+    </a>
+  </header>
+  <div class="workspace">
+  <section id="game-panel" class="panel game-view" aria-labelledby="you-title">
+    <div class="panel-heading"><h2 id="you-title">What humans see</h2><p><strong id="score">0</strong> apples · <span id="moves">0</span> moves</p></div>
+    <div class="board-wrap">
+      <canvas id="board" width="640" height="640" aria-label="Snake game board. While TabPFN plays, an arrow from the head shows each turn it considers; the brightest arrow is its pick."></canvas>
+      <div id="overlay" class="overlay" role="status" hidden>
+        <strong id="overlay-title"></strong>
+        <small id="overlay-progress"></small>
+      </div>
+    </div>
+    <p id="speed" class="speed" role="status" hidden></p>
+    <div class="controls">
+      <button id="play" class="primary" disabled>Watch TabPFN play</button>
+    </div>
+    <p id="setup" class="hint" hidden>Add TABPFN_TOKEN to .env and restart to play.</p>
+    <p id="error" role="alert" hidden></p>
+  </section>
+  <section id="data-view" class="panel tabpfn" aria-labelledby="tabpfn-title">
+    <div class="panel-heading">
+      <h2 id="tabpfn-title">What TabPFN sees</h2>
+      <span id="memory" class="hint">0 saved moves</span>
+    </div>
+    <p class="hint lead">Past moves fill the table. During play, the bottom three rows show the turns TabPFN is scoring.</p>
+    <div class="table-frame">
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Training data, scroll to see all columns">
+        <table id="training-table" aria-label="Saved moves with their rewards, then the candidate moves TabPFN scores"></table>
+      </div>
+    </div>
+    <div class="table-foot">
+      <button id="clear" disabled title="Save a backup of these moves, start a new table, and record random moves.">Clear table and play random games</button>
+      <div class="pagination">
+        <button id="table-prev" disabled aria-label="Earlier rows (up)">↑</button>
+        <span id="table-page"></span>
+        <button id="table-next" disabled aria-label="Later rows (down)">↓</button>
+      </div>
+    </div>
+    <p id="table-error" role="alert" hidden></p>
+  </section>
+  </div>
+  </div>
+  <section id="how-it-works" class="learning-guide" aria-labelledby="learning-title">
+    <h2 id="learning-title">How does it play?</h2>
+    <div class="guide-tabs" role="tablist" aria-label="About this demo">
+      <button id="guide-how-tab" type="button" role="tab" aria-selected="true" aria-controls="guide-how-panel">How it works</button>
+      <button id="guide-features-tab" type="button" role="tab" aria-selected="false" aria-controls="guide-features-panel" tabindex="-1">Features</button>
+    </div>
+    <div id="guide-how-panel" role="tabpanel" aria-labelledby="guide-how-tab" tabindex="0">
+      <p class="learning-intro">TabPFN uses past moves to answer one question: <strong>which turn looks best from here?</strong></p>
+      <figure class="learning-loop" aria-label="Saved moves go to TabPFN, which scores three turns. The snake takes a turn and its result is saved back in the table.">
+        <div class="loop-path">
+          <div><span class="loop-table" aria-hidden="true">▤</span><strong>Saved moves</strong><small>The examples</small></div>
+          <span class="loop-arrow" aria-hidden="true">→</span>
+          <div><span class="loop-model" aria-hidden="true">ƒ</span><strong>TabPFN</strong><small>Predicts a return</small></div>
+          <span class="loop-arrow" aria-hidden="true">→</span>
+          <div><span class="loop-turns" aria-hidden="true">↰ ↑ ↱</span><strong>Three turns</strong><small>Pick the highest</small></div>
+          <span class="loop-arrow" aria-hidden="true">→</span>
+          <div><span class="loop-snake" aria-hidden="true">▪▪▪</span><strong>Snake moves</strong><small>See what happens</small></div>
+        </div>
+        <figcaption><span aria-hidden="true">↳</span> Save the move and its reward, then repeat <span aria-hidden="true">↲</span></figcaption>
+      </figure>
+      <ol class="learning-steps">
+        <li>
+          <h3>Start with random moves</h3>
+          <p>We record 1,000 moves: the board, the turn, and what happened next. Every move earns a reward.</p>
+          <div class="reward-key" aria-label="Rewards"><span><b>+1</b> Eat an apple</span><span><b>−1</b> Crash or starve</span><span><b>−0.01</b> Any other move</span></div>
+        </li>
+        <li>
+          <h3>Put each move in a row</h3>
+          <p>Each possible turn is described by a few numbers: does it crash, does it eat the apple, does it get closer, how much room is left. The Features tab shows them.</p>
+          <div class="example-row" aria-label="Example saved row"><span>Move features</span><span>Turn left</span><span>Reward <b>−0.01</b></span></div>
+        </li>
+        <li>
+          <h3>Learn from the rewards</h3>
+          <p>We give TabPFN the rows and their rewards. It uses those examples to predict how other moves might turn out.</p>
+        </li>
+        <li>
+          <h3>Include what comes next</h3>
+          <p>A safe move can still lead to a dead end. After the first fit, we update the targets with the best predicted return from the next board.</p>
+          <div class="return-formula" aria-label="Target equals reward now plus 0.95 times the best predicted next return">
+            <span><b>Target</b><small>What we fit to</small></span><i>=</i><span><b>Reward now</b><small>What happened</small></span><i>+</i><span><b>0.95 × next return</b><small>Best predicted next turn</small></span>
+          </div>
+          <p>When the game ends, there is no next return to add. Repeating this is called <em>fitted Q iteration</em>.</p>
+        </li>
+        <li>
+          <h3>Choose a turn</h3>
+          <p>TabPFN scores left, straight, and right in one request. The snake takes the highest score, even if that move would crash.</p>
+          <figure class="score-example">
+            <div class="example-scores"><span class="example-chosen">↰ Left <b>+0.42</b><small>Chosen</small></span><span>↑ Straight <b>−0.88</b></span><span>↱ Right <b>+0.08</b></span></div>
+            <figcaption>Example scores, not a live prediction. Higher means more expected future reward.</figcaption>
+          </figure>
+        </li>
+        <li>
+          <h3>Save the result</h3>
+          <p>The new move joins the table. We periodically refit with the extra rows so later predictions can use them.</p>
+        </li>
+      </ol>
+      <p class="learning-note">TabPFN’s weights stay fixed. What changes is the table of examples and the targets we ask it to predict.</p>
+    </div>
+    <div id="guide-features-panel" role="tabpanel" aria-labelledby="guide-features-tab" tabindex="0" hidden>
+      <p class="learning-intro">A feature is one number describing a possible move. TabPFN never sees the grid itself. Try a turn below to see which numbers change.</p>
+      <div class="feature-example">
+        <figure class="feature-board-figure">
+          <svg id="feature-board" viewBox="0 0 280 260" role="img" aria-labelledby="feature-board-title feature-board-desc"></svg>
+          <figcaption>Example board · head at D3, facing right</figcaption>
+        </figure>
+        <div class="feature-choice">
+          <p class="example-label">Try a move</p>
+          <div class="feature-actions" role="group" aria-label="Example turn">
+            <button type="button" data-example-action="0" aria-pressed="true">↰ Left</button>
+            <button type="button" data-example-action="1" aria-pressed="false">↑ Straight</button>
+            <button type="button" data-example-action="2" aria-pressed="false">↱ Right</button>
+          </div>
+          <p id="feature-move-summary" role="status"></p>
+          <dl class="example-measurements">
+            <div><dt>Distance to apple</dt><dd id="example-distance"></dd></div>
+            <div><dt>Would crash?</dt><dd id="example-crash"></dd></div>
+            <div><dt>Reachable cells</dt><dd id="example-space"></dd></div>
+          </dl>
+          <p class="hint">This example is separate from the live game.</p>
+        </div>
+      </div>
+      <p class="learning-intro">TabPFN sees the two inputs below. The values shown match the example above.</p>
+      <dl class="feature-list">
+        <div><dt>Outcome</dt><dd>What the move leads to: whether it crashes, whether it eats the apple, whether it gets closer to the apple (+1) or farther away (−1), and how many cells are still reachable. The room estimate treats the body as stationary.<span class="feature-value" id="feature-outcome"></span></dd></div>
+        <div><dt>Action</dt><dd>The turn being scored: left = 0, straight = 1, right = 2.<span class="feature-value" id="feature-action"></span></dd></div>
+      </dl>
+      <p class="learning-note">Our code calculates these measurements from the current board. TabPFN predicts the return.</p>
+    </div>
+  </section>
+</main>
+<div id="tour" class="tour" data-place="center" role="dialog" aria-live="polite" hidden>
+  <h2 id="tour-title"></h2>
+  <div id="tour-body"></div>
+  <div class="tour-actions">
+    <span id="tour-dots" class="dots"></span>
+    <button id="tour-next" class="primary">Next</button>
+  </div>
+</div>
+<script type="module" src="/guide.js"></script>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

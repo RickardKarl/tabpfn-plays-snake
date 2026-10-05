@@ -1,0 +1,1 @@
+"""TabPFN Snake lab."""
