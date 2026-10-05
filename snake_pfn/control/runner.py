@@ -53,6 +53,7 @@ class Runner:
         self.job = None
         self.phase = "idle"  # idle · training · predicting · random
         self.practice_moves = 1000  # Random moves TabPFN watches before its first game
+        self.practice_seed = 1000  # Seeds those moves and their games; the intro demo keeps 42
         self.pending_query = None  # Rows TabPFN is scoring right now, for late-joining pages
         self.learn_seconds = None  # Wall time of the last fit job, rounds and warm-up included
         self.learn_rows = 0
@@ -78,6 +79,7 @@ class Runner:
                 "phase": self.phase,
                 "hunger_limit": starvation_limit(self.size),
                 "practice_moves": self.practice_moves,
+                "practice_seed": self.practice_seed,
                 "query": self.pending_query,
                 "error": self.error,
                 "message": self.message,
@@ -244,9 +246,15 @@ class Runner:
         log.info("Model ready: %d fitted Q round(s) on %d rows",
                  self.learner.rounds, self.learner.fit_rows)
 
-    def random_steps(self, moves, delay=0.002, food=None):
-        """Play many random moves across games quickly; the browser skips frames to keep up."""
-        seed = max((row.seed for row in self.store.rows), default=self.env.seed) + 1
+    def random_steps(self, moves, delay=0.002, food=None, seed=None):
+        """Play many random moves across games quickly; the browser skips frames to keep up.
+        `seed` restarts the move sequence and game seeds there, unless the table already
+        holds games from that seed on (then it continues them)."""
+        start = max((row.seed for row in self.store.rows), default=self.env.seed) + 1
+        if seed is not None and start <= seed:
+            self.rng = random.Random(seed)
+            start = seed
+        seed = start
         self.new_game(seed=seed, food=food)
         log.info("Random steps from seed %d", seed)
         self.play(moves, "random", 1, False, delay=delay)

@@ -341,3 +341,30 @@ def test_first_apple_can_be_placed_for_the_intro(tmp_path):
         head = runner.env.state.snake[0]
         state = client.post("/api/reset", json={"food": list(head)}).json()["state"]
         assert state["food"] not in state["snake"]
+
+
+def test_practice_seed_changes_practice_moves_but_not_the_demo(tmp_path):
+    def intro(path, practice_seed):
+        runner = Runner(path)
+        with TestClient(create_app(runner=runner)) as client:
+            client.post("/api/random-steps", json={"moves": 5, "delay": 0, "food": [0, 0]})
+            finish(runner)
+            client.post("/api/random-steps", json={"moves": 40, "delay": 0, "seed": practice_seed})
+            finish(runner)
+            return [(r.seed, r.action) for r in runner.store.rows]
+
+    first, same, other = intro(tmp_path / "a", 1000), intro(tmp_path / "b", 1000), intro(tmp_path / "c", 7)
+    assert first == same
+    assert first[:5] == other[:5] and first[5:] != other[5:]
+    assert first[5][0] == 1000 and other[5][0] == 7
+
+
+def test_practice_seed_continues_a_partly_filled_table(tmp_path):
+    runner = Runner(tmp_path)
+    with TestClient(create_app(runner=runner)) as client:
+        client.post("/api/random-steps", json={"moves": 40, "delay": 0, "seed": 1000})
+        finish(runner)
+        last = runner.store.rows[-1].seed
+        client.post("/api/random-steps", json={"moves": 10, "delay": 0, "seed": 1000})
+        finish(runner)
+        assert runner.store.rows[40].seed == last + 1

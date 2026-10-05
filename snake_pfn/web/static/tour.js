@@ -44,7 +44,7 @@ const STEPS = [
     title: 'Collecting moves',
     body: c => `<p class="counter"><strong>${n(c.rows)}</strong> moves</p>`,
     enter: c => c.rows < c.practice_moves
-      ? [['random-steps', {moves: c.practice_moves - c.rows, delay: 0.003}]] : null,
+      ? [['random-steps', {moves: c.practice_moves - c.rows, delay: 0.003, seed: c.practice_seed}]] : null,
     done: c => c.job === null,
     then: {
       title: c => `${n(c.rows)} moves`,

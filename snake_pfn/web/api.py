@@ -30,6 +30,7 @@ class RandomStepsRequest(BaseModel):
     moves: int = Field(default=1000, ge=1, le=5000)
     delay: float = Field(default=0.002, ge=0, le=5)  # Seconds between moves; slow for demos
     food: Cell | None = None  # Where the first apple goes; random when omitted
+    seed: int | None = Field(default=None, ge=0)  # Restart random moves and games from here
 
 
 class ResetRequest(BaseModel):
@@ -78,7 +79,7 @@ def create_app(data_dir="data", runner=None):
     @app.post("/api/random-steps")
     def random_steps(body: RandomStepsRequest):
         return command(
-            lambda: runner.launch("random-steps", lambda: runner.random_steps(body.moves, body.delay, body.food))
+            lambda: runner.launch("random-steps", lambda: runner.random_steps(**body.model_dump()))
         )
 
     @app.post("/api/play")
