@@ -4,6 +4,10 @@
 
 **TabPFN learns to play Snake from a table of past moves, without any gradient training.**
 
+It's a hard setting for a tabular model: consecutive moves depend on each other, so the
+rows aren't i.i.d.; positive rewards are rare; and TabPFN sees only 1,000 random moves
+before its first game.
+
 [TabPFN](https://priorlabs.ai) is a pretrained model for tabular data: give it a table of
 examples and it predicts values for new rows. Here every Snake move becomes a row, TabPFN
 predicts the future reward of turning left, going straight or turning right, and the snake
