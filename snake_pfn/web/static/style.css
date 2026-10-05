@@ -189,6 +189,7 @@ td.cell-head { font-weight: 600; }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .panel.tabpfn tbody.candidates td.pending { animation: none; }
+  .speed.asking .live-tag i, .tour .live-dot { animation: none; }
 }
 
 /* Upload sweep while the table becomes TabPFN's context. */
@@ -216,6 +217,12 @@ body[data-tour] .controls { visibility: hidden; }
 .tour .counter strong { display: block; font-size: 40px; line-height: 1.1; color: #a6e3a1; font-variant-numeric: tabular-nums; }
 .tour .live { display: inline-flex; align-items: center; gap: 8px; margin-top: 4px; padding: 5px 12px; border-radius: 999px; background: #24382e; font-size: 13px; color: #cfe0cb; }
 .tour .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #e0655b; animation: pulse 1.2s ease-in-out infinite; }
+/* Leads the answer-time line during a TabPFN game; the dot pulses while a request is out. */
+.live-tag { display: inline-flex; align-items: center; gap: 6px; margin-right: 9px; padding: 3px 9px 3px 7px; border-radius: 999px;
+  background: #1b2b24; color: #f1f5e4; font-size: 10px; font-weight: 700; letter-spacing: .7px; text-transform: uppercase; vertical-align: 1px; }
+.live-tag i { width: 7px; height: 7px; border-radius: 50%; background: #e0655b; }
+.speed.asking .live-tag i { animation: pulse .7s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(224, 101, 91, .6); } 50% { opacity: .55; box-shadow: 0 0 0 5px rgba(224, 101, 91, 0); } }
 .tour .error { color: #f0a08a; font-size: 13px; }
 .tour-actions { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
 .tour[data-place="center"] .tour-actions { justify-content: center; }

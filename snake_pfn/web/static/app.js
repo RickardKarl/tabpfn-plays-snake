@@ -32,6 +32,7 @@ function showError(message) {
 }
 
 // Speed is the point of the demo: how long each answer takes, counted live while pending.
+// During a TabPFN game a Live tag leads the line; its dot pulses while a request is out.
 function renderSpeed() {
   // A replayed answer may already be queued: never count past its real time.
   const known = queue.find(frame => frame.kind === 'prediction')?.seconds ?? Infinity;
@@ -40,7 +41,12 @@ function renderSpeed() {
     : answerSeconds ?? current?.predict_seconds;
   $('speed').hidden = answer == null;
   if (answer == null) return;
-  const text = `Answered in <strong>${answer.toFixed(2)} s</strong>`;
+  const live = !!current && (current.job === 'playing' || view.pending
+    || queue.some(frame => frame.kind === 'query' || frame.kind === 'prediction'));
+  const tag = live ? `<span class="live-tag"><i></i>${current.model_mode === 'stub' ? 'Stub' : 'Live'}</span>` : '';
+  const text = tag + (view.pending ? 'TabPFN is answering… ' : 'TabPFN answered in ')
+    + `<strong>${answer.toFixed(2)} s</strong>`;
+  $('speed').classList.toggle('asking', view.pending);
   if ($('speed').innerHTML !== text) $('speed').innerHTML = text;
 }
 
