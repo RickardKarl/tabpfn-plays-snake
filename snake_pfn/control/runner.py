@@ -13,10 +13,8 @@ from uuid import uuid4
 import numpy as np
 
 from ..game.engine import ACTIONS, DEFAULT_SIZE, Snake, candidate, starvation_limit
-from .experience import Store, Transition, collect
-from .features import GROUPS, PRESETS, all_features
+from .experience import Store, Transition
 from .learner import Learner, stub_enabled
-from .log import EventLog
 from .policies import heuristic_action
 
 log = logging.getLogger("snake_pfn.runner")
@@ -25,11 +23,14 @@ PICKS = ("turns left", "goes straight", "turns right")
 
 
 class Runner:
-    def __init__(self, data_dir="data", learner_factory=Learner, size=None):
+    def __init__(self, data_dir="data", learner_factory=Learner, size=None, fresh=False):
         self.data_dir = Path(data_dir)
-        self.events = EventLog()
         self.size = int(size or os.getenv("SNAKE_BOARD_SIZE", str(DEFAULT_SIZE)))
         self.store = Store(self.data_dir / "experience.jsonl")
+        if fresh and self.store.rows:
+            # Every server start begins at the intro; earlier moves are archived, not deleted.
+            count = len(self.store.rows)
+            log.info("Archived %d saved moves to %s; starting fresh", count, self.store.clear())
         log.info("Loaded %d saved moves from %s", len(self.store.rows), self.store.path)
         self.learner_factory = learner_factory
         self.learner = learner_factory()
@@ -41,11 +42,10 @@ class Runner:
             archive = self.store.clear()
             old = ", ".join(f"{n}×{n}" for n in sorted(foreign))
             self.message = f"Archived saved moves from a {old} board to {archive}."
-            log.warning("Board is %d×%d; %s", self.size, self.size, self.message)
+            log.warning("Board is %dx%d; %s", self.size, self.size, self.message)
         self.episode_id = uuid4().hex
         self.rng = random.Random(42)
-        self.episodes = 0
-        self.history = []
+        self.episodes = 0  # Finished games this session; every fifth triggers a refit
         self.q_values = None
         self.last_action = None
         self.last_state = None
@@ -63,9 +63,9 @@ class Runner:
         self.stop = threading.Event()
         self.worker = None
         self._snapshot = {}
-        log.info("Board %d×%d · inputs %s · TabPFN token %s%s", self.size, self.size,
+        log.info("Board %dx%d, inputs %s, TabPFN token %s%s", self.size, self.size,
                  self.learner.spec.to_dict(), "found" if os.getenv("TABPFN_TOKEN") else "missing",
-                 " · STUB MODEL, no TabPFN calls" if stub_enabled() else "")
+                 ", STUB MODEL, no TabPFN calls" if stub_enabled() else "")
         self.publish()
 
     def publish(self):
@@ -73,8 +73,6 @@ class Runner:
             self._snapshot = {
                 "state": self.env.state.to_dict(),
                 "seq": self.seq,
-                "episodes": self.episodes,
-                "history": self.history[-30:],
                 "rows": len(self.store.rows),
                 "job": self.job,
                 "phase": self.phase,
@@ -87,18 +85,12 @@ class Runner:
                 "last_action": self.last_action,
                 "decision_state": self.last_state.to_dict() if self.last_state else None,
                 "decision_query": self.query_rows(self.last_state) if self.last_state else None,
-                "features": self.learner.spec.to_dict(),
-                "columns": list(self.learner.spec.row(self.env.state, 1)),
-                "rounds": self.learner.rounds,
-                "fit_rows": self.learner.fit_rows,
-                "fit_seconds": self.learner.last_fit_seconds,
                 "learn_seconds": self.learn_seconds,
                 "learn_rows": self.learn_rows,
                 "predict_seconds": self.learner.last_predict_seconds,
                 "fitted": self.learner.model is not None,
                 "has_token": bool(os.getenv("TABPFN_TOKEN")) or stub_enabled(),
                 "model_mode": "stub" if stub_enabled() else "hosted",
-                "model_version": "stub" if stub_enabled() else os.getenv("SNAKE_MODEL_VERSION", "v3.5-fast"),
             }
 
     def snapshot(self):
@@ -149,55 +141,20 @@ class Runner:
             frames = [f for f in self.frames if f["seq"] > after][:limit]
             return {"frames": frames, "latest": self.seq}
 
-    def catalog(self):
-        sample = all_features(Snake(0, self.size).state, 1)
-        return {
-            "groups": [
-                {"id": key, "description": text, "columns": list(sample[key])}
-                for key, text in GROUPS.items()
-            ],
-            "presets": PRESETS,
-        }
-
-    def table(self, offset=0, limit=20, source="auto", latest=False):
-        """Read captured fit inputs without making any model/API calls."""
+    def table(self, offset=0, limit=20, latest=False):
+        """One page of saved moves as model inputs and observed rewards. No API calls."""
         with self.lock:
-            learner = self.learner
-            fitted = learner.fit_table
-            prediction = learner.prediction_table
-            if fitted is not None and source != "experience":
-                if latest:
-                    offset = max(0, ((len(fitted["rows"]) - 1) // limit) * limit)
-                return {
-                    "source": "fit",
-                    "columns": fitted["columns"],
-                    "rows": fitted["rows"][offset : offset + limit],
-                    "targets": fitted["targets"][offset : offset + limit],
-                    "rewards": fitted["rewards"][offset : offset + limit],
-                    "directions": fitted["directions"][offset : offset + limit],
-                    "total": len(fitted["rows"]),
-                    "offset": offset,
-                    "round": fitted["round"],
-                    "prediction": prediction,
-                    "latest_index": None,
-                }
-            # Before the first fit, show saved observations, explicitly as a preview.
             if latest:
                 offset = max(0, ((len(self.store.rows) - 1) // limit) * limit)
             rows = list(self.store.rows[offset : offset + limit])
-            spec = learner.spec
-            columns = list(spec.row(self.env.state, 1))
+            spec = self.learner.spec
             return {
-                "source": "preview",
-                "columns": columns,
+                "columns": list(spec.row(self.env.state, 1)),
                 "rows": [list(spec.row(row.state, row.action).values()) for row in rows],
-                "targets": [None] * len(rows),
                 "rewards": [row.reward for row in rows],
                 "directions": [candidate(row.state, row.action)[0] for row in rows],
                 "total": len(self.store.rows),
                 "offset": offset,
-                "round": 0,
-                "prediction": prediction,
                 "latest_index": len(self.store.rows) - 1 if self.store.rows else None,
             }
 
@@ -236,21 +193,6 @@ class Runner:
             log.info("Stop requested during %s", self.job)
         self.stop.set()
 
-    def configure(self, spec):
-        with self.lock:
-            if self.job:
-                raise ValueError("Pause and wait before changing inputs")
-            spec.row(self.env.state, 1)  # Validate before replacing any fitted state.
-            self.learner = self.learner_factory(spec=spec)
-            self.q_values = None
-            self.last_action = None
-            self.last_state = None
-            self.message = "Inputs changed. TabPFN will use them next game."
-            self.error = None
-            log.info("Inputs changed to %s → %d columns; fitted model reset",
-                     spec.to_dict(), len(spec.row(self.env.state, 1)))
-            self.publish()
-
     def reset(self, food=None):
         with self.lock:
             if self.job:
@@ -281,21 +223,12 @@ class Runner:
             archive = self.store.clear()
             log.info("Cleared %d saved moves; archived to %s; fitted model reset", count, archive)
             self.learner = self.learner_factory(spec=self.learner.spec)
-            self.history = []
             self.q_values = None
             self.last_action = None
             self.last_state = None
             self.message = "Table cleared." if archive else "Table is empty."
             self.error = None
             self.publish()
-
-    def collect(self, episodes):
-        # Never restart collection on the same seeds after a process restart.
-        seed = max((r.seed for r in self.store.rows), default=99) + 1
-        log.info("Collecting %d seed games from seed %d", episodes, seed)
-        games = collect(self.store, episodes, seed, self.size, stop=self.stop.is_set)
-        self.message = f"Saved {len(games)} games to the table."
-        log.info("Collected %d games: %s", len(games), games)
 
     def fit(self, rounds, message="Training TabPFN…"):
         self.set_phase("training", message)
@@ -331,8 +264,8 @@ class Runner:
             self.set_phase("random", "Random moves…")
         else:
             self.set_message("TabPFN is playing.")
-        log.info("Playing with %s policy · up to %d moves%s", policy, moves,
-                 "" if policy == "tabpfn" else f" · epsilon {epsilon:.2f}")
+        log.info("Playing with %s policy, up to %d moves%s", policy, moves,
+                 "" if policy == "tabpfn" else f", epsilon {epsilon:.2f}")
         for index in range(moves):
             if self.stop.is_set():
                 break
@@ -344,7 +277,7 @@ class Runner:
             state = self.env.state
             if policy == "tabpfn":
                 # Greedy: TabPFN's highest value always wins. No exploration.
-                self.set_phase("predicting", "TabPFN is thinking…")
+                self.set_phase("predicting")
                 self.q_values = self.last_action = self.last_state = None
                 self.pending_query = self.query_rows(state)
                 self.frame(state, kind="query", query=self.pending_query)
@@ -366,15 +299,15 @@ class Runner:
             next_state, reward = self.env.step(action)
             self.frame(next_state, q_values, action, reward=reward)
             self.pending_query = None
-            log.info(
-                "Move %d: head %s → %s (%s)%s · reward %+.2f%s",
+            log.debug(
+                "Move %d: head %s -> %s (%s)%s, reward %+.2f%s",
                 next_state.steps,
                 self.square(state.snake[0]),
                 DIRECTION_NAMES[next_state.direction],
                 ACTIONS[action],
-                f" · Q {self.format_q(q_values)}" if q_values else "",
+                f", Q {self.format_q(q_values)}" if q_values else "",
                 reward,
-                f" · game over: {next_state.reason}" if next_state.done else "",
+                f", game over: {next_state.reason}" if next_state.done else "",
             )
             self.last_action, self.last_state = action, state
             self.store.append(
@@ -385,16 +318,7 @@ class Runner:
             ended = next_state.done
             if ended:
                 self.episodes += 1
-                self.history.append(
-                    {
-                        "episode": self.episodes,
-                        "score": next_state.score,
-                        "steps": next_state.steps,
-                        "policy": policy,
-                        "reason": next_state.reason,
-                    }
-                )
-                log.info("Episode %d over: %s · %d apples · %d moves · %d saved moves total",
+                log.info("Episode %d over: %s, %d apples, %d moves, %d saved moves total",
                          self.episodes, next_state.reason, next_state.score,
                          next_state.steps, len(self.store.rows))
             self.publish()

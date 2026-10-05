@@ -1,12 +1,16 @@
 import argparse
+import getpass
 import json
+import logging
+import os
+import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv, set_key
 
 from .control.experience import Store, collect
 from .control.features import PRESETS, FeatureSpec
-from .control.learner import Learner, evaluate
+from .control.learner import Learner, evaluate, stub_enabled
 
 
 def positive(value):
@@ -16,8 +20,32 @@ def positive(value):
     return n
 
 
+def ask_for_token(parser):
+    """Prompt for a TabPFN key in the terminal and offer to save it to .env."""
+    if not sys.stdin.isatty():
+        parser.error("TABPFN_TOKEN is not set. Add it to .env (TABPFN_TOKEN=...) "
+                     "and run again, or pass --stub to debug without TabPFN.")
+    print("No TABPFN_TOKEN found. Create one at "
+          "https://platform.priorlabs.ai/account/api-keys")
+    try:
+        token = getpass.getpass("Paste your TabPFN API key (input is hidden): ").strip()
+        if not token:
+            parser.error("No key entered. Pass --stub to debug without TabPFN.")
+        print(f"Got key ending in …{token[-4:]}")
+        save = input("Save it to .env for next time? [Y/n] ").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        sys.exit(1)
+    os.environ["TABPFN_TOKEN"] = token
+    if save in ("", "y", "yes"):
+        env = Path(".env")
+        env.touch(mode=0o600, exist_ok=True)
+        set_key(env, "TABPFN_TOKEN", token, quote_mode="never")
+        print(f"Saved to {env.resolve()}")
+
+
 def main():
-    load_dotenv()
+    load_dotenv(find_dotenv(usecwd=True))  # The .env next to where you run the server
     parser = argparse.ArgumentParser(description="Snake × TabPFN experiment lab")
     sub = parser.add_subparsers(dest="command", required=True)
     serve = sub.add_parser("serve")
@@ -25,13 +53,14 @@ def main():
     serve.add_argument("--data-dir", default="data")
     serve.add_argument("--stub", action="store_true",
                        help="Debug: placeholder model with API-like delays, no TabPFN calls")
+    serve.add_argument("--verbose", action="store_true", help="Also log every move")
     gather = sub.add_parser("collect")
     gather.add_argument("--episodes", type=positive, default=20)
     gather.add_argument("--seed", type=int, default=0)
     for name in ("export", "train", "compare"):
         cmd = sub.add_parser(name)
         if name != "compare":
-            cmd.add_argument("--features", default="board_outcomes", help="Preset name or JSON config")
+            cmd.add_argument("--features", default="outcomes", help="Preset name or JSON config")
         if name in ("train", "compare"):
             cmd.add_argument("--rounds", type=positive, default=3)
             cmd.add_argument("--max-rows", type=positive, default=None,
@@ -55,15 +84,20 @@ def main():
         sub.choices[name].add_argument("--data", default="data/experience.jsonl")
     args = parser.parse_args()
     if args.command == "serve":
-        import os
-
         import uvicorn
 
         from .web.api import create_app
 
         if args.stub:
             os.environ["SNAKE_STUB_MODEL"] = "1"
-
+        if not os.getenv("TABPFN_TOKEN") and not stub_enabled():
+            ask_for_token(parser)
+        # Jobs, fits, and API timings go to the terminal; add --verbose for every move.
+        logging.basicConfig(format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+                            datefmt="%H:%M:%S")
+        logging.getLogger("snake_pfn").setLevel(logging.DEBUG if args.verbose else logging.INFO)
+        logging.getLogger("tabpfn_client").setLevel(logging.INFO)
+        print(f"Snake / TabPFN running at http://127.0.0.1:{args.port}", flush=True)
         uvicorn.run(create_app(args.data_dir), host="127.0.0.1", port=args.port)
         return
     if args.command == "evaluate":

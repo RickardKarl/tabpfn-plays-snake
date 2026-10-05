@@ -18,7 +18,7 @@
   </header>
   <div class="workspace">
   <section id="game-panel" class="panel game-view" aria-labelledby="you-title">
-    <div class="panel-heading"><h2 id="you-title">TabPFN plays Snake</h2><p><strong id="score">0</strong> apples · <span id="moves">0</span> moves</p></div>
+    <div class="panel-heading"><h2 id="you-title">What humans see</h2><p><strong id="score">0</strong> apples · <span id="moves">0</span> moves</p></div>
     <div class="board-wrap">
       <canvas id="board" width="640" height="640" aria-label="Snake game board. While TabPFN plays, an arrow from the head shows each turn it considers; the brightest arrow is its pick."></canvas>
       <div id="overlay" class="overlay" role="status" hidden>
@@ -30,7 +30,6 @@
     <div class="controls">
       <button id="play" class="primary" disabled>Watch TabPFN play</button>
     </div>
-    <p id="game-status" class="hint" role="status">Press play.</p>
     <p id="setup" class="hint" hidden>Add TABPFN_TOKEN to .env and restart to play.</p>
     <p id="error" role="alert" hidden></p>
   </section>
@@ -85,8 +84,8 @@
         </li>
         <li>
           <h3>Put each move in a row</h3>
-          <p>The board and turn become numbers in a table. The Features tab shows what those numbers mean.</p>
-          <div class="example-row" aria-label="Example saved row"><span>Board features</span><span>Turn left</span><span>Reward <b>−0.01</b></span></div>
+          <p>Each possible turn is described by a few numbers: does it crash, does it eat the apple, does it get closer, how much room is left. The Features tab shows them.</p>
+          <div class="example-row" aria-label="Example saved row"><span>Move features</span><span>Turn left</span><span>Reward <b>−0.01</b></span></div>
         </li>
         <li>
           <h3>Learn from the rewards</h3>
@@ -116,11 +115,11 @@
       <p class="learning-note">TabPFN’s weights stay fixed. What changes is the table of examples and the targets we ask it to predict.</p>
     </div>
     <div id="guide-features-panel" role="tabpanel" aria-labelledby="guide-features-tab" tabindex="0" hidden>
-      <p class="learning-intro">A feature is one number describing the board or a possible move. Try a turn below to see which numbers change.</p>
+      <p class="learning-intro">A feature is one number describing a possible move. TabPFN never sees the grid itself. Try a turn below to see which numbers change.</p>
       <div class="feature-example">
         <figure class="feature-board-figure">
           <svg id="feature-board" viewBox="0 0 280 260" role="img" aria-labelledby="feature-board-title feature-board-desc"></svg>
-          <figcaption>Example board · head at D3, facing right<br>Cell values: 0 empty · −1 apple · 1 tail → 4 head</figcaption>
+          <figcaption>Example board · head at D3, facing right</figcaption>
         </figure>
         <div class="feature-choice">
           <p class="example-label">Try a move</p>
@@ -138,9 +137,8 @@
           <p class="hint">This example is separate from the live game.</p>
         </div>
       </div>
-      <p class="learning-intro">TabPFN sees the three inputs below. The values shown match the example above.</p>
+      <p class="learning-intro">TabPFN sees the two inputs below. The values shown match the example above.</p>
       <dl class="feature-list">
-        <div><dt>Board</dt><dd>One column per square. The numbers keep track of empty cells, the apple, and the order of the snake’s body.<span class="feature-value">16 cells → 16 columns on this board</span></dd></div>
         <div><dt>Outcome</dt><dd>What the move leads to: whether it crashes, whether it eats the apple, whether it gets closer to the apple (+1) or farther away (−1), and how many cells are still reachable. The room estimate treats the body as stationary.<span class="feature-value" id="feature-outcome"></span></dd></div>
         <div><dt>Action</dt><dd>The turn being scored: left = 0, straight = 1, right = 2.<span class="feature-value" id="feature-action"></span></dd></div>
       </dl>

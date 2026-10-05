@@ -53,7 +53,7 @@ function showExample(action) {
     for (let x = 0; x < state.size; x++) {
       const value = f.board[`cell_${y}_${x}`];
       const type = value === -1 ? 'food' : value === state.snake.length ? 'head' : value > 0 ? 'body' : 'empty';
-      cells.push(`<rect class="example-cell ${type}" x="${28 + x * 50}" y="${28 + y * 50}" width="48" height="48" rx="5"/><text class="example-cell-value ${type}" x="${52 + x * 50}" y="${57 + y * 50}">${value}</text>`);
+      cells.push(`<rect class="example-cell ${type}" x="${28 + x * 50}" y="${28 + y * 50}" width="48" height="48" rx="5"/>`);
     }
     labels.push(`<text class="example-axis" x="${52 + y * 50}" y="17">${'ABCD'[y]}</text><text class="example-axis" x="14" y="${57 + y * 50}">${y + 1}</text>`);
   }
@@ -64,7 +64,7 @@ function showExample(action) {
     ? '<path class="example-collision" d="M226 133v38"/>'
     : `<rect class="example-target" x="${29 + move.head[0] * 50}" y="${29 + move.head[1] * 50}" width="46" height="46" rx="5"/>`;
   const arrow = `<path class="example-direction${crash ? ' blocked' : ''}" d="M${hx + dx * 14} ${hy + dy * 14}L${ex} ${ey}m${-dx * 7 - dy * 6} ${-dy * 7 + dx * 6}L${ex} ${ey}l${-dx * 7 + dy * 6} ${-dy * 7 - dx * 6}"/>`;
-  byId('feature-board').innerHTML = `<title id="feature-board-title">Example: turn ${names[action].toLowerCase()}</title><desc id="feature-board-desc">A four by four board. The snake faces right from D3; the apple is at D1. ${byId('feature-move-summary').textContent} Cell numbers show the board encoding.</desc>${labels.join('')}${cells.join('')}${target}${arrow}`;
+  byId('feature-board').innerHTML = `<title id="feature-board-title">Example: turn ${names[action].toLowerCase()}</title><desc id="feature-board-desc">A four by four board. The snake faces right from D3; the apple is at D1. ${byId('feature-move-summary').textContent}</desc>${labels.join('')}${cells.join('')}${target}${arrow}`;
 }
 
 moveButtons.forEach(button => button.addEventListener('click', () => showExample(Number(button.dataset.exampleAction))));

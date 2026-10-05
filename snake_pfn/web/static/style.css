@@ -50,14 +50,14 @@ canvas { display: block; width: 100%; height: auto; }
 .overlay[hidden] { display: none; }
 .overlay > strong { font-size: 15px; }
 .overlay small { font-size: 12px; color: #a3b3a4; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-select, button { font: inherit; font-size: 13px; color: inherit; border: 1px solid #ccd6c8; border-radius: 7px; background: #fffef9; padding: 11px 12px; }
+button { font: inherit; font-size: 13px; color: inherit; border: 1px solid #ccd6c8; border-radius: 7px; background: #fffef9; padding: 11px 12px; }
 .hint { color: #6f7d72; font-size: 12px; line-height: 1.5; }
 button { cursor: pointer; font-weight: 500; }
 button:hover:not(:disabled) { background: #edf2e8; }
 button.primary { color: white; border-color: #246749; background: #246749; }
 button.primary:hover:not(:disabled) { background: #185238; }
-button:disabled, select:disabled { opacity: .45; cursor: not-allowed; }
-button:focus-visible, select:focus-visible { outline: 2px solid #b67443; outline-offset: 3px; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button:focus-visible { outline: 2px solid #b67443; outline-offset: 3px; }
 #error { color: #914b30; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 .table-scroll { max-height: 450px; overflow: auto; border: 1px solid #ccd6c8; border-radius: 7px; }
 table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -124,8 +124,6 @@ td.cell-head { font-weight: 600; }
 .example-cell.body { fill: #7fb775; }
 .example-cell.head { fill: #d0eea0; }
 .example-cell.food { fill: #edb16d; }
-.example-cell-value { text-anchor: middle; font: 15px system-ui, sans-serif; fill: #173f31; }
-.example-cell-value.empty { fill: #879581; }
 .example-target { stroke: #246749; stroke-width: 2; fill: none; }
 .example-direction { stroke: #173f31; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
 .example-direction.blocked, .example-collision { stroke: #a74370; }
@@ -170,7 +168,6 @@ td.cell-head { font-weight: 600; }
 #setup, #error { margin: 6px 0 0; }
 .speed { margin: 10px 0 6px; font-size: 13px; color: #647064; font-variant-numeric: tabular-nums; }
 .speed strong { color: #185238; font-weight: 600; }
-#game-status { margin: 8px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #memory { white-space: nowrap; }
 
 /* One table: saved moves, then TabPFN's three candidates with the reward to predict.
@@ -217,7 +214,6 @@ body[data-tour] .controls { visibility: hidden; }
 .tour ul, .tour ol { margin: 6px 0 10px; padding-left: 22px; text-align: left; }
 .tour li + li { margin-top: 4px; }
 .tour .counter strong { display: block; font-size: 40px; line-height: 1.1; color: #a6e3a1; font-variant-numeric: tabular-nums; }
-.tour .progress { font-size: 12px; color: #93a18c; }
 .tour .live { display: inline-flex; align-items: center; gap: 8px; margin-top: 4px; padding: 5px 12px; border-radius: 999px; background: #24382e; font-size: 13px; color: #cfe0cb; }
 .tour .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #e0655b; animation: pulse 1.2s ease-in-out infinite; }
 .tour .error { color: #f0a08a; font-size: 13px; }

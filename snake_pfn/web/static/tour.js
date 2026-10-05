@@ -150,13 +150,9 @@ function update(c) {
 export const tour = {
   init(dependencies) {
     deps = dependencies;
-    $('tour-next').onclick = () => {
-      console.debug('tour: next pressed on', STEPS[step]?.id, {armed, completed, error});
-      return error ? enter(step) : advance();
-    };
+    $('tour-next').onclick = () => (error ? enter(step) : advance());
   },
   seen: () => !!localStorage.getItem(SEEN),
-  get active() { return step !== null; },
   begin(id = 'hook') {
     if (id === 'hook') localStorage.removeItem(SEEN);
     enter(index(id));
